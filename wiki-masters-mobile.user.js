@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.6.3
+// @version      1.6.4
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -205,10 +205,16 @@
     // Base horaire commune à toutes les cartes évaluées. Une heure avec peu de
     // ventes est rapprochée du profil par défaut (poids, en ventes pondérées).
     profilePriorWeight: 8,
-    // Durée de chaque prix conseillé : la plus courte dont le prix estimé (selon
-    // l'heure de fin) est à moins de minLongerGain wikibidous du meilleur.
-    // « Lancer plus tard » : proposé seulement pour un gain d'au moins autant.
-    minLongerGain: 100,
+    // Durée de chaque prix conseillé (v0.20.2) : la meilleure heure de fin
+    // d'abord ; une durée plus courte seulement si son prix estimé est à moins
+    // de minLongerGainPct du meilleur (1 % : même qualité d'heure). Avant, un
+    // écart fixe de 100 wikibidous faisait partir en 10 min toute carte de
+    // moins de ~1 000 wikibidous, quelle que soit l'heure. À 10 000, 1 % = 100.
+    minLongerGainPct: 0.01,
+    // « Lancer plus tard » : seulement pour au moins 2 % et 10 wikibidous de
+    // plus sur le prix « Normal ».
+    minLaterGainPct: 0.02,
+    minLaterGain: 10,
     // Heures conseillées calées sur la courbe de référence (le graphique du
     // profil par défaut) plutôt que sur la base mesurée (v0.19.0, demande de
     // l'utilisateur). La base mesurée reste affichée dans le diagnostic.
@@ -587,8 +593,8 @@
 
   // Durées conseillées (v0.18.0), pour chaque prix conseillé : prix estimé
   // selon l'heure de fin (prix × e^indice), puis la durée la plus courte dont
-  // le prix estimé est à moins de minLongerGain wikibidous du meilleur. Pas
-  // la peine d'attendre plus longtemps pour un gain qui ne compte pas.
+  // le prix estimé est à moins de minLongerGainPct du meilleur (v0.20.2 : écart
+  // relatif ; avant, 100 wikibidous fixes). La meilleure heure de fin décide.
   function durationAdvice(profile, rarity, now, prices) {
     const allowed = CONFIG.durations;
     const options = allowed.map((minutes) => {
@@ -598,13 +604,13 @@
     const pick = (price) => {
       if (!price) return null;
       const best = Math.max(...options.map((o) => price * o.factor));
-      const o = options.find((x) => best - price * x.factor < CONFIG.minLongerGain) || options[0];
+      const o = options.find((x) => best - price * x.factor <= price * CONFIG.minLongerGainPct) || options[0];
       return { ...o, estimate: Math.round(price * o.factor) };
     };
     const normal = pick(prices.normal);
     // Vaut-il mieux lancer plus tard ? Départs dans les 12 prochaines heures,
     // en journée, seulement si le prix « Normal » estimé y gagne au moins
-    // minLongerGain wikibidous.
+    // minLaterGainPct et minLaterGain wikibidous.
     let later = null;
     if (normal) {
       for (let offset = 30; offset <= 720; offset += 30) {
@@ -613,7 +619,8 @@
         if (startHour < CONFIG.wakeFromHour || startHour >= CONFIG.wakeToHour) continue;
         for (const minutes of allowed) {
           const estimate = Math.round(prices.normal * Math.exp(profileAt(profile, start + minutes * 60000)));
-          if (estimate - normal.estimate >= CONFIG.minLongerGain && (!later || estimate > later.estimate)) {
+          const gain = estimate - normal.estimate;
+          if (gain >= CONFIG.minLaterGain && gain >= prices.normal * CONFIG.minLaterGainPct && (!later || estimate > later.estimate)) {
             later = { start, minutes, end: start + minutes * 60000, estimate, gain: estimate - normal.estimate };
           }
         }

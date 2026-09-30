@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.9.0
+// @version      1.10.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -301,6 +301,10 @@
       // plus) ; rouge franc à 0 étoile, vert franc au maximum.
       starStep: 100,
       starMax: 3,
+      // Perte (aide v0.24.0 ; téléphone v1.10.0) : sous 0 étoile (mise au-dessus du
+      // prix de revente), pastille en pourcentage négatif : perte / prix de
+      // revente. Rouge de plus en plus sombre jusqu'à −lossDarkPct %.
+      lossDarkPct: 50,
       // Page d'une enchère : enchère relue toutes les… ; page ouverte
       // directement : identifiants des ventes chargées par la page essayés.
       auctionReadMs: 20000,
@@ -412,6 +416,7 @@
       hueHigh: 120,
       starSaturation: 85,
       starLightness: 50,
+      lossLightness: 32,
       valueSaturation: 75,
       valueLightness: 50,
       valueDip: 6,
@@ -565,6 +570,7 @@
       'buy.summaryHours': 'Pastilles : valeur relue si plus vieille que (heures)',
       'buy.starStep': 'Étoiles : une demi-étoile par tranche de (wikibidous) [>0]',
       'buy.starMax': 'Étoiles : au plus [>0]',
+      'buy.lossDarkPct': 'Perte : rouge le plus sombre à partir de (−%) [>0]',
       'buy.auctionReadMs': 'Page d’une enchère : relue toutes les (ms)',
       'buy.pageSeenIds': 'Page ouverte directement : ventes chargées par la page essayées',
       autoOpenMarket: null,
@@ -625,6 +631,7 @@
       'colors.hueHigh': 'Teinte du haut de l’échelle (120 = vert)',
       'colors.starSaturation': 'Étoiles : saturation (%)',
       'colors.starLightness': 'Étoiles : luminosité (%)',
+      'colors.lossLightness': 'Perte : luminosité du rouge le plus sombre (%)',
       'colors.valueSaturation': 'Collection : saturation (%)',
       'colors.valueLightness': 'Collection : luminosité (%)',
       'colors.valueDip': 'Collection : assombrissement au milieu de l’échelle (%)',
@@ -2462,6 +2469,8 @@
     .wv-stars { letter-spacing: 0; text-shadow: none; -webkit-background-clip: text; background-clip: text; color: transparent;
       background-image: linear-gradient(90deg, var(--wv-sf, #0b0b0e) var(--wv-p), var(--wv-se, rgba(0,0,0,.25)) var(--wv-p)); }
     #wv-panel .wv-stars { --wv-sf: var(--wv-c); --wv-se: rgba(255,255,255,.22); }
+    #wv-badges .wv-b.wv-loss { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+    #wv-panel .wv-loss { color: var(--wv-c); font-weight: 800; }
   `;
   document.head.appendChild(badgeStyle);
   document.body.appendChild(badgeLayer);
@@ -2481,6 +2490,23 @@
   const starsHtml = (stars) => `<span class="wv-stars" style="--wv-p:${((stars / CONFIG.buy.starMax) * 100).toFixed(1)}%">${'★'.repeat(CONFIG.buy.starMax)}</span>`;
   const fmtStars = (stars) => `${String(stars).replace('.', ',')} étoile${stars > 1 ? 's' : ''}`;
   const fmtGain = (gain) => `${gain >= 0 ? '+' : '−'}${fmtPrice(Math.abs(gain))}`;
+  // Perte : pourcentage négatif du prix de revente (au moins −1 %), à la
+  // place des étoiles. Gain de 104 → 1 étoile ; de 12 → 0 étoile ; perte de
+  // 50 sur une revente à 500 → −10 %.
+  const lossPct = (gain, ref) => (gain >= 0 ? null : -Math.max(1, Math.round((-gain / Math.max(1, ref || 0)) * 100)));
+  const lossColor = (pct) => {
+    const C = CONFIG.colors;
+    const t = Math.min(1, -pct / CONFIG.buy.lossDarkPct);
+    return `hsl(${C.hueLow}, ${C.starSaturation}%, ${Math.round(C.starLightness + t * (C.lossLightness - C.starLightness))}%)`;
+  };
+  const fmtLoss = (pct) => `−${Math.abs(pct)} %`;
+  // Note d'un achat : étoiles si le gain est positif ou nul, sinon perte en %.
+  function rateOf(gain, ref) {
+    const pct = lossPct(gain, ref);
+    if (pct !== null) return { loss: true, pct, color: lossColor(pct), html: `<span class="wv-loss">${fmtLoss(pct)}</span>`, text: fmtLoss(pct) };
+    const stars = starsOf(gain);
+    return { loss: false, stars, color: starColor(stars), html: starsHtml(stars), text: fmtStars(stars) };
+  }
 
   // Ligne d'explication pour une carte shiny (pastilles, encarts).
   function shinyNote(via, premium, n) {
@@ -2516,18 +2542,19 @@
     // Étoiles : gain en revendant au prix de vente rapide (réglable : médiane).
     const ref = refOf(sum);
     const gain = ref.price - info.pay;
-    const stars = starsOf(gain);
+    const rate = rateOf(gain, ref.price);
     const unsure = info.shiny && sum.shinyVia === 'inconnue';
     const caps = sum.resaleCap == null
       ? 'Mise max pour revendre : vente rapide inconnue (relecture en cours).'
       : `Mise max pour revendre : ${fmtPrice(sum.resaleCap)} (vente rapide ${fmtPrice(sum.quick)} − ${CONFIG.buy.resaleGap})`;
     return {
-      bg: starColor(stars),
-      text: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${fmtStars(stars)}${unsure ? ' ?' : ''}`,
-      html: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${starsHtml(stars)}${unsure ? ' ?' : ''}`,
+      bg: rate.color,
+      loss: rate.loss,
+      text: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${rate.text}${unsure ? ' ?' : ''}`,
+      html: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${rate.html}${unsure ? ' ?' : ''}`,
       tip: `${head} — ${sum.n} ventes récentes${sum.stale ? ' (valeur ancienne, relecture en cours)' : ''}\n`
         + (info.shiny ? `${shinyNote(sum.shinyVia, sum.premium, sum.n)}\n` : '')
-        + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, revente (${ref.name}) ${fmtPrice(ref.price)} → ${fmtGain(gain)} wikibidous : ${fmtStars(stars)}\n`
+        + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, revente (${ref.name}) ${fmtPrice(ref.price)} → ${fmtGain(gain)} wikibidous : ${rate.loss ? `perte de ${fmtLoss(rate.pct).slice(1)}` : rate.text}\n`
         + `Vente rapide ${sum.quick != null ? fmtPrice(sum.quick) : '—'} · normale ${sum.normal != null ? fmtPrice(sum.normal) : '—'} · médiane ${fmtPrice(sum.median)}\n${caps}\n`
         + (isHot(sum.sales48) ? `🔥 Se vend beaucoup : ${sum.sales48} ventes en ${CONFIG.stats.hotHours} h\n` : '')
         + `${collectionLine}\nDétail complet : ouvre l’enchère.`,
@@ -2599,7 +2626,7 @@
         badges.set(info.id, b);
       }
       b.target = target;
-      b.el.className = 'wv-b';
+      b.el.className = content.loss ? 'wv-b wv-loss' : 'wv-b';
       b.el.style.setProperty('--wv-c', content.bg || CONFIG.colors.unknown);
       b.el.style.opacity = sum && sum.stale ? String(CONFIG.colors.staleOpacity) : '';
       const markup = content.html || esc(content.text);
@@ -2991,9 +3018,10 @@
       const pr = buy.price && buy.price.enough ? buy.price : {};
       const ref = refOf({ quick: pr.quick, normal: pr.normal, median: adv.median });
       const gain = pay != null ? ref.price - pay : null;
-      const stars = gain != null ? starsOf(gain) : 0;
+      const rate = gain != null ? rateOf(gain, ref.price) : null;
       const other = ref.name === DELTA_REFS.quick ? ['Revente à la médiane', Math.round(adv.median)] : ['Revente rapide', pr.quick];
       const otherGain = pay != null && other[1] != null ? other[1] - pay : null;
+      const otherRate = otherGain != null ? rateOf(otherGain, other[1]) : null;
       const collection = !!collectionMem[a.cardId];
       // Ventes récentes (v0.23.0) : moins de minRecentSales → ni étoiles ni mise max.
       const recentOk = liquid(buy.sales7);
@@ -3006,10 +3034,10 @@
         : pay <= adv.median ? ['wv-ambitious', `${collection ? '📚 ' : ''}Acceptable pour la collection (sous la médiane)`]
         : ['wv-bad', '⛔ Trop cher : au-dessus de la médiane'];
       if (pay != null) {
-        body += `<div class="wv-row" style="--wv-c:${recentOk ? starColor(stars) : CONFIG.colors.unknown}"><div>
+        body += `<div class="wv-row" style="--wv-c:${recentOk ? rate.color : CONFIG.colors.unknown}"><div>
           <div class="wv-label">${a.current == null ? 'Mise de départ' : 'Prochaine mise'}</div>
-          <div class="wv-price">${fmtPrice(pay)}<small>${recentOk ? `${starsHtml(stars)} ${fmtGain(gain)} en revendant (${esc(ref.name)} ${fmtPrice(ref.price)}) · ` : ''}P${Math.round(adv.percentile(pay) * 100)}</small></div>
-          ${recentOk && otherGain != null ? `<div class="wv-when" style="--wv-c:${starColor(starsOf(otherGain))}">${other[0]} (${fmtPrice(other[1])}) : ${starsHtml(starsOf(otherGain))} ${fmtGain(otherGain)}</div>` : ''}
+          <div class="wv-price">${fmtPrice(pay)}<small>${recentOk ? `${rate.html} ${fmtGain(gain)} en revendant (${esc(ref.name)} ${fmtPrice(ref.price)}) · ` : ''}P${Math.round(adv.percentile(pay) * 100)}</small></div>
+          ${recentOk && otherRate ? `<div class="wv-when" style="--wv-c:${otherRate.color}">${other[0]} (${fmtPrice(other[1])}) : ${otherRate.html} ${fmtGain(otherGain)}</div>` : ''}
           ${a.leader ? `<div class="wv-when">En tête : ${esc(a.leader)}${a.current != null ? ` à ${fmtPrice(a.current)}` : ''}</div>` : ''}
         </div></div>`;
         body += `<div class="wv-tip ${verdict[0]}">${esc(verdict[1])}</div>`;
@@ -3021,7 +3049,7 @@
       body += `<div class="wv-caps">${cap('wv-quick', 'max revente', resaleCap)}`
         + `${cap('wv-ambitious', 'max collection', collectionCap)}</div>`;
       if (resaleCap !== null) body += `<div class="wv-status">Max revente = vente rapide ${fmtPrice(adv.quick)} − ${CONFIG.buy.resaleGap}</div>`;
-      buy.summary = pay == null ? '' : recentOk ? `<span style="--wv-c:${starColor(stars)}">${starsHtml(stars)}</span> ${verdict[1].split(' ')[0]}`
+      buy.summary = pay == null ? '' : recentOk ? `<span style="--wv-c:${rate.color}">${rate.html}</span> ${verdict[1].split(' ')[0]}`
         : `💤 ${buy.sales7 ?? '?'}/${CONFIG.stats.countDays} j`;
       if (!recentOk) body += `<div class="wv-status">Pas de mise max : ${recentNote}.</div>`;
       body += `<div class="wv-status">Ventes (${esc(adv.period)}) : ${fmtPrice(adv.min)} – ${fmtPrice(adv.max)}, médiane ${fmtPrice(adv.median)}`

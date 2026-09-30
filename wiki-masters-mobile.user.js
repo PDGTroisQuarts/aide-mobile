@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.6.4
+// @version      1.7.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -191,6 +191,10 @@
     // conseillées, quelle que soit la rareté (avant : ni 10 ni 30 min, ni 1 h
     // pour une légendaire).
     durations: [10, 30, 60, 180, 360, 720],
+    // Carte dont la médiane dépasse longMinAbove wikibidous (v0.21.0) : jamais
+    // moins de longMinMinutes (pas de vente en 10 min).
+    longMinAbove: 500,
+    longMinMinutes: 30,
     // Si la carte n'a pas pu être repérée sans clic (mémoire, requêtes de la
     // page), ouvrir l'onglet « Marché » une fois, puis revenir sur « Détails ».
     // Réglable depuis le menu Tampermonkey.
@@ -227,7 +231,7 @@
     // sa dernière vente et sa 10e dernière (ou moins de 10 ventes en tout).
     thinSales7d: 5,
     thinSpanDays: 7,
-    // Carte « sans valeur » (défausse proposée, nettoyage, pastille rouge) :
+    // Carte « sans valeur » (défausse proposée, nettoyage, pastille violette sous UR) :
     // pas de prix estimé (« – »), prix « Normal » sous worthlessBelow, ou 💤 et
     // prix sous thinWorthlessBelow.
     worthlessBelow: 30,
@@ -239,9 +243,10 @@
     // quelques Mo en tout ; les plus anciens sont effacés d'abord.
     maxIds: 30000,
     maxSummaries: 20000,
-    // Pastilles de la collection : prix « Normal » estimé. Rouge = sans valeur
-    // (voir worthlessBelow), puis du bleu (worthlessBelow) au vert franc (valueGreen).
-    valueGreen: 100,
+    // Pastilles de la collection : prix « Normal » (la médiane). Violet = à
+    // défausser (sans valeur, rareté sous UR), sinon du rouge (worthlessBelow)
+    // au vert franc (valueGreen et au-delà ; 500 depuis la v0.21.0, 100 avant).
+    valueGreen: 500,
     collectionSummaryHours: 48,
     // Cartes shiny : prime mesurée par rareté dès minCards cartes (sinon toutes
     // raretés confondues) ; une carte shiny est estimée sur ses propres ventes
@@ -270,9 +275,12 @@
       // Résumé par carte (médiane, prix estimé, plafonds) : affiché aussitôt
       // pour une carte déjà vue, puis relu s'il a plus de 6 h.
       summaryHours: 6,
-      // Couleur des pastilles : vert franc à −80 % de la médiane, jaune à 0,
-      // rouge franc à +80 %.
-      colorSpan: 0.8,
+      // Étoiles des pastilles (v0.21.0) : gain théorique si la carte est
+      // achetée maintenant puis revendue (prix de revente − mise). Une
+      // demi-étoile par starStep wikibidous, starMax étoiles au plus (600 et
+      // plus) ; rouge franc à 0 étoile, vert franc au maximum.
+      starStep: 100,
+      starMax: 3,
     },
     debug: true,
   };
@@ -286,8 +294,9 @@
   const KEY_COLLECTION = 'wv.collection';
   const KEY_SUMMARY = 'wv.summary';
   const KEY_DELTA_REF = 'wv.deltaRef';
-  // Référence du « 0 % » des pastilles du marché et de l'encart d'une enchère.
-  const DELTA_REFS = { quick: 'vente rapide', resaleCap: 'mise max pour revendre', normal: 'vente normale' };
+  // Prix de revente des étoiles (pastilles du marché, encart d'une enchère) :
+  // vente rapide ou médiane (v0.21.0 ; « Normal » = médiane).
+  const DELTA_REFS = { quick: 'vente rapide', normal: 'médiane' };
   const deltaRef = () => {
     const r = GM_getValue(KEY_DELTA_REF, 'quick');
     return DELTA_REFS[r] ? r : 'quick';
@@ -295,7 +304,8 @@
   // Prix de référence d'une carte, et son nom (repli si la référence manque).
   function refOf(v) {
     const want = deltaRef();
-    for (const k of [want, 'quick', 'normal']) if (v[k] != null) return { price: v[k], name: DELTA_REFS[k] };
+    const val = (k) => (k === 'normal' && v.median != null ? Math.round(v.median) : v[k]);
+    for (const k of [want, 'quick', 'normal']) if (val(k) != null) return { price: val(k), name: DELTA_REFS[k] };
     return { price: v.median, name: 'médiane' };
   }
   let collectionMem = GM_getValue(KEY_COLLECTION, {});
@@ -377,7 +387,7 @@
   // mesuré (résumé d'avant la v0.14), null = moins de 10 ventes.
   const isThin = (sales7, span10) => (sales7 != null && sales7 < CONFIG.thinSales7d)
     || (span10 !== undefined && (span10 === null || span10 > CONFIG.thinSpanDays));
-  // Sans valeur : à défausser (fiche, nettoyage), pastille rouge.
+  // Sans valeur : à défausser (fiche, nettoyage), pastille violette (sous UR).
   const worthless = (normal, thin) => normal === null || normal < CONFIG.worthlessBelow || (thin && normal < CONFIG.thinWorthlessBelow);
   // Explication du 💤 (encarts, infobulles).
   const thinText = (sales7, span10) => `${sales7 ?? '?'} vente${sales7 > 1 ? 's' : ''} en 7 jours`
@@ -391,22 +401,10 @@
     const share = (p) => countAtLeast(prices, p) / n;
     const p25 = quantile(prices, 0.25);
     const median = quantile(prices, 0.5);
-    const p70 = quantile(prices, 0.7);
 
-    // « Normal » : le prix qui maximise prix × part des ventes ≥ prix, borné
-    // entre la médiane et P70 ; la médiane seule si les ventes sont trop peu nombreuses.
-    let best = median;
-    if (n >= 8) {
-      let bestScore = -1;
-      for (const p of new Set(prices)) {
-        const score = p * share(p);
-        if (score > bestScore) {
-          bestScore = score;
-          best = p;
-        }
-      }
-      best = Math.min(Math.max(best, median), p70);
-    }
+    // « Normal » = la médiane exacte des ventes retenues (v0.21.0, à la demande
+    // de l'utilisateur ; avant : le prix qui maximisait prix × part des ventes).
+    const best = median;
     // « Ambitieux » : la carte peut être remise en vente si elle ne part pas.
     // Valeur d'une mise en vente à p, en comptant les remises en vente :
     //   V(p) = p × S / (1 − k × (1 − S)), S = part des ventes ≥ p, k = relistKeep.
@@ -477,11 +475,14 @@
     const n = prices.length;
     if (pool.length < 3 || !n) return { enough: false, n };
     const median = quantile(prices, 0.5);
-    const advice = { enough: true, n, period, median, min: prices[0], max: prices[n - 1], keepCap: null, resaleCap: null, resale: null };
+    const advice = { enough: true, n, period, median, min: prices[0], max: prices[n - 1], keepCap: null, resaleCap: null, resale: null,
+      quick: Math.max(1, Math.round(quantile(prices, 0.25))) };
     if (n >= CONFIG.buy.minSales) {
       advice.keepCap = Math.floor(reservationPrice(prices, CONFIG.buy.waitCost * median));
       advice.resale = resaleValue(prices).value;
-      advice.resaleCap = Math.floor(advice.resale / (1 + CONFIG.buy.resaleMargin));
+      // Toujours sous la vente rapide (v0.21.0) : revendue vite, la carte
+      // rapporte encore quelque chose.
+      advice.resaleCap = Math.min(Math.floor(advice.resale / (1 + CONFIG.buy.resaleMargin)), advice.quick - 1);
     }
     // Rang centile d'un prix : part des ventes moins chères (ex æquo pour moitié).
     advice.percentile = (price) => {
@@ -596,7 +597,8 @@
   // le prix estimé est à moins de minLongerGainPct du meilleur (v0.20.2 : écart
   // relatif ; avant, 100 wikibidous fixes). La meilleure heure de fin décide.
   function durationAdvice(profile, rarity, now, prices) {
-    const allowed = CONFIG.durations;
+    // Médiane au-dessus de longMinAbove : pas de vente en moins de longMinMinutes.
+    const allowed = prices.median > CONFIG.longMinAbove ? CONFIG.durations.filter((m) => m >= CONFIG.longMinMinutes) : CONFIG.durations;
     const options = allowed.map((minutes) => {
       const end = now + minutes * 60000;
       return { minutes, end, factor: Math.exp(profileAt(profile, end)) };
@@ -1118,7 +1120,7 @@
       via: 'prime',
       premium: p,
       price: pr.enough ? { ...pr, quick: up(pr.quick), normal: up(pr.normal), ambitious: up(pr.ambitious), min: up(pr.min), median: up(pr.median), max: up(pr.max) } : pr,
-      buy: { ...b, median: up(b.median), min: up(b.min), max: up(b.max), keepCap: cap(b.keepCap), resaleCap: cap(b.resaleCap), resale: up(b.resale),
+      buy: { ...b, median: up(b.median), min: up(b.min), max: up(b.max), keepCap: cap(b.keepCap), resaleCap: cap(b.resaleCap), resale: up(b.resale), quick: up(b.quick),
         percentile: (price) => b.percentile(price / k) },
     };
   }
@@ -2048,6 +2050,9 @@
       color: #0b0b0e; background: var(--wv-c); box-shadow: 0 2px 8px rgba(0,0,0,.45); }
     #wv-badges .wv-b { --wv-c: #a1a1aa; font-size: 10px; padding: 2px 5px; }
     #wv-badges .wv-v { cursor: help; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+    .wv-stars { letter-spacing: 0; text-shadow: none; -webkit-background-clip: text; background-clip: text; color: transparent;
+      background-image: linear-gradient(90deg, var(--wv-sf, #0b0b0e) var(--wv-p), var(--wv-se, rgba(0,0,0,.25)) var(--wv-p)); }
+    #wv-panel .wv-stars { --wv-sf: var(--wv-c); --wv-se: rgba(255,255,255,.22); }
   `;
   document.head.appendChild(badgeStyle);
   document.body.appendChild(badgeLayer);
@@ -2058,14 +2063,15 @@
   const failedAt = new Map(); // carte → échec de lecture (nouvel essai 1 min après)
   const between = (a, b) => a + Math.random() * (b - a);
 
-  // Couleur d'un écart à la médiane : vert (−80 % et moins), jaune (0),
-  // rouge (+80 % et plus), en passant par la roue des teintes.
-  function deltaColor(delta) {
-    const t = Math.max(-1, Math.min(1, delta / CONFIG.buy.colorSpan));
-    const hue = t < 0 ? 50 + -t * (135 - 50) : 50 - t * 50;
-    return `hsl(${Math.round(hue)}, 90%, ${t < 0 ? 48 : 55}%)`;
-  }
-  const fmtDelta = (delta) => `${delta >= 0 ? '+' : '-'}${Math.abs(Math.round(delta * 100))}%`;
+  // Étoiles (v0.21.0) : gain théorique en revendant au prix de référence ce
+  // qu'on achète maintenant. Une demi-étoile par starStep wikibidous, starMax
+  // au plus ; couleur du rouge franc (0 étoile) au vert franc (starMax).
+  const starsOf = (gain) => Math.min(CONFIG.buy.starMax, Math.floor(Math.max(0, gain) / CONFIG.buy.starStep) / 2);
+  const starColor = (stars) => `hsl(${Math.round((stars / CONFIG.buy.starMax) * 120)}, 85%, 50%)`;
+  // starMax étoiles, remplies selon la note (demi-étoiles comprises).
+  const starsHtml = (stars) => `<span class="wv-stars" style="--wv-p:${((stars / CONFIG.buy.starMax) * 100).toFixed(1)}%">${'★'.repeat(CONFIG.buy.starMax)}</span>`;
+  const fmtStars = (stars) => `${String(stars).replace('.', ',')} étoile${stars > 1 ? 's' : ''}`;
+  const fmtGain = (gain) => `${gain >= 0 ? '+' : '−'}${fmtPrice(Math.abs(gain))}`;
 
   // Ligne d'explication pour une carte shiny (pastilles, encarts).
   function shinyNote(via, premium, n) {
@@ -2081,24 +2087,26 @@
     const head = `${info.title || 'Carte'}${info.rarity ? ` (${info.rarity}${info.shiny ? ' ✦ shiny' : ''})` : ''}`;
     if (sum.median === null) return { bg: null, text: `${star}${sum.n} v.`, tip: `${head} : trop peu de ventes pour comparer (${sum.n}).` };
     if (info.pay === null) return { bg: null, text: '—', tip: `${head} : prix illisible.` };
-    // 0 % = prix de vente rapide estimé (réglable dans le menu).
+    // Étoiles : gain en revendant au prix de vente rapide (réglable : médiane).
     const ref = refOf(sum);
-    const delta = info.pay / ref.price - 1;
+    const gain = ref.price - info.pay;
+    const stars = starsOf(gain);
     const collection = !!collectionMem[info.cardId];
     const unsure = info.shiny && sum.shinyVia === 'inconnue';
     const caps = sum.resaleCap === null
       ? `Plafond revente : il faut au moins ${CONFIG.buy.minSales} ventes.`
       : `Plafond revente : ${fmtPrice(sum.resaleCap)} (revente estimée ${fmtPrice(sum.resale)})`;
     return {
-      bg: deltaColor(delta),
-      text: `${collection ? '★ ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${fmtDelta(delta)}${unsure ? ' ?' : ''}`,
+      bg: starColor(stars),
+      text: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${fmtStars(stars)}${unsure ? ' ?' : ''}`,
+      html: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${starsHtml(stars)}${unsure ? ' ?' : ''}`,
       tip: `${head} — ${sum.n} ventes récentes${sum.stale ? ' (valeur ancienne, relecture en cours)' : ''}\n`
         + (info.shiny ? `${shinyNote(sum.shinyVia, sum.premium, sum.n)}\n` : '')
-        + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, ${ref.name} ${fmtPrice(ref.price)} → ${fmtDelta(delta)}\n`
+        + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, revente (${ref.name}) ${fmtPrice(ref.price)} → ${fmtGain(gain)} wikibidous : ${fmtStars(stars)}\n`
         + `Vente rapide ${sum.quick != null ? fmtPrice(sum.quick) : '—'} · normale ${sum.normal != null ? fmtPrice(sum.normal) : '—'} · médiane ${fmtPrice(sum.median)}\n${caps}\n`
         + (isHot(sum.sales48) ? `🔥 Se vend beaucoup : ${sum.sales48} ventes en 48 h\n` : '')
         + (collection
-          ? `★ Carte de collection : plafond = médiane. Clic : retirer de la collection.`
+          ? `📚 Carte de collection : plafond = médiane. Clic : retirer de la collection.`
           : `Clic : marquer comme carte de collection (plafond = médiane).`)
         + '\nDétail complet : ouvre l’enchère.',
     };
@@ -2172,7 +2180,11 @@
       b.el.className = 'wv-b';
       b.el.style.setProperty('--wv-c', content.bg || '#a1a1aa');
       b.el.style.opacity = sum && sum.stale ? '.7' : '';
-      if (b.el.textContent !== content.text) b.el.textContent = content.text;
+      const markup = content.html || esc(content.text);
+      if (b.el.__wvHtml !== markup) {
+        b.el.innerHTML = markup;
+        b.el.__wvHtml = markup;
+      }
       b.el.title = content.tip;
       b.el.dataset.card = info.cardId || '';
     }
@@ -2216,12 +2228,15 @@
   // Collection : prix « Normal » estimé sur chaque carte de la grille
   // ---------------------------------------------------------------------------
 
-  // Rouge si sans valeur (à défausser), puis du bleu (worthlessBelow) au vert
-  // franc (valueGreen et au-delà).
-  function valueColor(price, thin = false) {
-    if (worthless(price, thin)) return 'hsl(0, 85%, 55%)';
-    const t = Math.min(1, Math.max(0, (price - CONFIG.worthlessBelow) / (CONFIG.valueGreen - CONFIG.worthlessBelow)));
-    return `hsl(${Math.round(215 - t * 80)}, ${Math.round(70 + t * 25)}%, ${Math.round(55 - t * 10)}%)`;
+  // v0.21.0 : violet si à défausser (sans valeur et rareté sous UR : C, PC,
+  // R, SR), sinon du rouge (worthlessBelow et moins) au vert franc (valueGreen
+  // et au-delà). rarity = null : jamais violet (carte shiny, rareté inconnue).
+  const DISCARD_COLOR = 'hsl(275, 70%, 58%)';
+  const discardRarity = (rarity) => RARITIES.indexOf(rarity) >= 0 && RARITIES.indexOf(rarity) < RARITIES.indexOf('UR');
+  function valueColor(price, thin = false, rarity = null) {
+    if (worthless(price, thin) && discardRarity(rarity)) return DISCARD_COLOR;
+    const t = price == null ? 0 : Math.min(1, Math.max(0, (price - CONFIG.worthlessBelow) / (CONFIG.valueGreen - CONFIG.worthlessBelow)));
+    return `hsl(${Math.round(t * 120)}, 75%, ${Math.round(50 - Math.sin(t * Math.PI) * 6)}%)`;
   }
 
   // Cartes de la grille (relevé réel) : div.rounded-2xl.overflow-hidden, classe
@@ -2292,22 +2307,23 @@
       } else if (!sum) {
         [text, bg, tip] = ['…', null, `${head} : lecture des ventes…`];
       } else if (sum.normal === null) {
-        [text, bg, tip] = ['–', valueColor(null), `${head} : trop peu de ventes (${sum.n}) pour estimer un prix${profile ? '.' : ' → à défausser.'}`];
+        [text, bg, tip] = ['–', valueColor(null, false, shiny ? null : rarity),
+          `${head} : trop peu de ventes (${sum.n}) pour estimer un prix${profile || !discardRarity(rarity) ? '.' : ' → à défausser.'}`];
       } else if (profile) {
         const thin = isThin(sum.sales7, sum.span10);
         const quick = sum.quick != null ? sum.quick : sum.normal;
         text = `${thin ? '💤 ' : isHot(sum.sales48) ? '🔥 ' : ''}${fmtPrice(quick)}`;
-        bg = valueColor(quick, thin);
+        bg = valueColor(quick, thin, shiny ? null : rarity);
         tip = `${head} : vente rapide estimée à ${fmtPrice(quick)} wikibidous · normale ${fmtPrice(sum.normal)}`
           + `${sum.median != null ? ` · médiane ${fmtPrice(sum.median)}` : ''} (${thinText(sum.sales7, sum.span10)})`
           + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en 48 h).` : '.');
       } else {
         const thin = isThin(sum.sales7, sum.span10);
         text = `${thin ? '💤 ' : isHot(sum.sales48) ? '🔥 ' : ''}${fmtPrice(sum.normal)}`;
-        bg = valueColor(sum.normal, thin);
+        bg = valueColor(sum.normal, thin, shiny ? null : rarity);
         tip = `${head} : vente « Normal » estimée à ${fmtPrice(sum.normal)} wikibidous (${thinText(sum.sales7, sum.span10)})`
           + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en 48 h).` : '.')
-          + (worthless(sum.normal, thin) ? ' → sans valeur, à défausser.' : '');
+          + (worthless(sum.normal, thin) && discardRarity(rarity) ? ' → sans valeur, à défausser.' : '');
       }
       let b = cardBadges.get(face);
       if (!b) {
@@ -2317,12 +2333,12 @@
         badgeLayer.appendChild(b.el);
         cardBadges.set(face, b);
       }
-      // Carte shiny : étoile, explication, et jamais le rouge « à défausser »
-      // tant que la prime n'est pas mesurée.
+      // Carte shiny : étoile, explication, jamais le violet « à défausser »
+      // (une shiny n'est jamais défaussée), gris tant que la prime n'est pas mesurée.
       if (shiny && sum && cardId) {
         text = `✦ ${text}`;
         tip = `${tip}\n${shinyNote(sum.shinyVia, sum.premium, sum.n)}`.replace(' → à défausser.', '.');
-        if (sum.shinyVia === 'inconnue' || (bg === valueColor(null))) bg = '#a78bfa';
+        if (sum.shinyVia === 'inconnue') bg = '#94a3b8';
       }
       b.el.style.setProperty('--wv-c', bg || '#a1a1aa');
       b.el.style.opacity = sum && sum.stale ? '.7' : '';
@@ -2547,19 +2563,24 @@
       // Mise à payer : le montant proposé par le site, sinon calculé (départ, ou +10 %).
       const computed = a.current == null ? a.base : nextBid(a.current);
       const pay = pageMinBid() || computed;
-      // 0 % = prix de vente rapide estimé (réglable), comme sur les pastilles.
+      // Étoiles : gain en revendant au prix de référence (vente rapide, ou
+      // médiane selon le menu), comme sur les pastilles ; l'autre prix en dessous.
       const pr = buy.price && buy.price.enough ? buy.price : {};
-      const ref = refOf({ quick: pr.quick, normal: pr.normal, resaleCap: adv.resaleCap, median: adv.median });
-      const delta = pay ? pay / ref.price - 1 : null;
+      const ref = refOf({ quick: pr.quick, normal: pr.normal, median: adv.median });
+      const gain = pay != null ? ref.price - pay : null;
+      const stars = gain != null ? starsOf(gain) : 0;
+      const other = ref.name === DELTA_REFS.quick ? ['Revente à la médiane', Math.round(adv.median)] : ['Revente rapide', pr.quick];
+      const otherGain = pay != null && other[1] != null ? other[1] - pay : null;
       const collection = !!collectionMem[a.cardId];
       const verdict = pay == null ? null
         : adv.resaleCap !== null && pay <= adv.resaleCap ? ['wv-quick', '✅ Bonne affaire, même pour revendre']
-        : pay <= adv.median ? ['wv-ambitious', `${collection ? '★ ' : ''}Acceptable pour la collection (sous la médiane)`]
+        : pay <= adv.median ? ['wv-ambitious', `${collection ? '📚 ' : ''}Acceptable pour la collection (sous la médiane)`]
         : ['wv-bad', '⛔ Trop cher : au-dessus de la médiane'];
       if (pay != null) {
-        body += `<div class="wv-row" style="--wv-c:${deltaColor(delta)}"><div>
+        body += `<div class="wv-row" style="--wv-c:${starColor(stars)}"><div>
           <div class="wv-label">${a.current == null ? 'Mise de départ' : 'Prochaine mise'}</div>
-          <div class="wv-price">${fmtPrice(pay)}<small>${fmtDelta(delta)} vs ${esc(ref.name)} (${fmtPrice(ref.price)}) · P${Math.round(adv.percentile(pay) * 100)}</small></div>
+          <div class="wv-price">${fmtPrice(pay)}<small>${starsHtml(stars)} ${fmtGain(gain)} en revendant (${esc(ref.name)} ${fmtPrice(ref.price)}) · P${Math.round(adv.percentile(pay) * 100)}</small></div>
+          ${otherGain != null ? `<div class="wv-when" style="--wv-c:${starColor(starsOf(otherGain))}">${other[0]} (${fmtPrice(other[1])}) : ${starsHtml(starsOf(otherGain))} ${fmtGain(otherGain)}</div>` : ''}
           ${a.leader ? `<div class="wv-when">En tête : ${esc(a.leader)}${a.current != null ? ` à ${fmtPrice(a.current)}` : ''}</div>` : ''}
         </div></div>`;
         body += `<div class="wv-tip ${verdict[0]}">${esc(verdict[1])}</div>`;
@@ -2571,7 +2592,7 @@
       body += `<div class="wv-caps">${cap('wv-quick', 'max revente', adv.resaleCap)}`
         + `${cap('wv-ambitious', 'max collection', Math.floor(adv.median))}</div>`;
       if (adv.resaleCap !== null) body += `<div class="wv-status">Revente estimée ${fmtPrice(adv.resale)}</div>`;
-      buy.summary = pay == null ? '' : `<span style="color:${deltaColor(delta)}">${fmtDelta(delta)}</span> ${verdict[1].split(' ')[0]}`;
+      buy.summary = pay == null ? '' : `<span style="--wv-c:${starColor(stars)}">${starsHtml(stars)}</span> ${verdict[1].split(' ')[0]}`;
       if (adv.resaleCap === null) body += `<div class="wv-status">Mise max pour revendre : il faut au moins ${CONFIG.buy.minSales} ventes.</div>`;
       body += `<div class="wv-status">Ventes (${esc(adv.period)}) : ${fmtPrice(adv.min)} – ${fmtPrice(adv.max)}, médiane ${fmtPrice(adv.median)}`
         + `${pr.quick != null ? ` · vente rapide ${fmtPrice(pr.quick)}, normale ${fmtPrice(pr.normal)}` : ''}</div>`;
@@ -2806,7 +2827,7 @@
         const useOwn = !!own && own.enough && own.n >= CONFIG.shiny.ownMinSales;
         const b = useOwn ? own : adviceFor(data.sales || [], a.rarity, false).buy;
         // 3 à 7 ventes : revente prudente, 80 % de la vente la plus basse, comme la tablette (v1.6.3).
-        const thin = b.enough && b.resaleCap == null && b.min != null ? Math.floor(b.min / (1 + CONFIG.buy.resaleMargin)) : null;
+        const thin = b.enough && b.resaleCap == null && b.min != null ? Math.min(Math.floor(b.min / (1 + CONFIG.buy.resaleMargin)), b.quick - 1) : null;
         remote.caps.set(key, { at: Date.now(), n: b.n || 0, resale: b.enough ? (b.resaleCap ?? thin) : null, thin: thin != null,
           collection: b.enough ? Math.floor(b.median) : null, median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn });
       }).catch(() => {}).finally(() => remote.capsBusy.delete(key));
@@ -2930,11 +2951,11 @@
     alert(`L’encart s’affichera ${top ? 'en haut' : 'en bas'} de l’écran.`);
   });
 
-  GM_registerMenuCommand(`Pastilles du marché : 0 % = ${DELTA_REFS[deltaRef()]} (changer)`, () => {
+  GM_registerMenuCommand(`Étoiles du marché : revente = ${DELTA_REFS[deltaRef()]} (changer)`, () => {
     const order = Object.keys(DELTA_REFS);
     const next = order[(order.indexOf(deltaRef()) + 1) % order.length];
     GM_setValue(KEY_DELTA_REF, next);
-    alert(`Pastilles du marché et encart d’une enchère : 0 % = ${DELTA_REFS[next]}.\nLa page va se recharger.`);
+    alert(`Étoiles des pastilles du marché et de l’encart d’une enchère : revente = ${DELTA_REFS[next]}.\nLa page va se recharger.`);
     location.reload();
   });
 
@@ -2991,7 +3012,7 @@
       `Débit vers le site : ${gate.status()}`,
       `Réponses de la page lues : ${hookedResponses} · résumés de cartes : ${Object.keys(summaries).length} · pastilles de la collection : ${cardBadges.size}`,
       `Télécommande : ${rTopic() ? `sujet ${rTopic()}` : 'pas activée'} · enchères suivies ${remote.followed.length} · synchro ${remote.syncStatus} · page ${location.pathname}`,
-      `Relais dans la page : ${bridgeReady ? 'actif' : 'inactif (requêtes directes)'} · minuteries : ${workerOk ? 'worker' : 'setTimeout'} · 0 % des pastilles : ${DELTA_REFS[deltaRef()]}`,
+      `Relais dans la page : ${bridgeReady ? 'actif' : 'inactif (requêtes directes)'} · minuteries : ${workerOk ? 'worker' : 'setTimeout'} · étoiles : revente = ${DELTA_REFS[deltaRef()]}`,
       `Achats connus : ${Object.keys(bought).length}${state.card ? ` · cette carte : ${state.purchase ? `${state.purchase.price} (${state.purchase.rarity || '?'})` : 'aucun'}` : ''}`
         + ` · fiche shiny : ${state.view ? state.shiny : '—'}`,
       shinyReport(),

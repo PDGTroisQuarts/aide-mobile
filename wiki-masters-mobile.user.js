@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.7.0
+// @version      1.8.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -92,6 +92,8 @@
   let bridgeReady = false;
   const pendingCalls = new Map();
   let callSeq = 0;
+  // Délai maximal d'une requête au site (CONFIG.read.timeoutMs, appliqué au démarrage).
+  let requestTimeoutMs = 30000;
   document.addEventListener(`${CHANNEL}-out`, (e) => {
     let m;
     try {
@@ -148,17 +150,17 @@
   function pageFetch(url, accept = true) {
     const abs = new URL(url, location.href).href;
     if (!bridgeReady) {
-      // Délai maximal, comme par le relais (30 s).
+      // Délai maximal, comme par le relais.
       const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 30000);
+      setTimeout(() => ctrl.abort(), requestTimeoutMs);
       return fetch(abs, { credentials: 'include', headers: accept ? { accept: 'application/json' } : {}, signal: ctrl.signal });
     }
     return new Promise((resolve, reject) => {
       const id = ++callSeq;
       const timeout = setTimeout(() => {
         pendingCalls.delete(id);
-        reject(new Error('pas de réponse en 30 s'));
-      }, 30000);
+        reject(new Error(`pas de réponse en ${Math.round(requestTimeoutMs / 1000)} s`));
+      }, requestTimeoutMs);
       pendingCalls.set(id, (m) => {
         clearTimeout(timeout);
         if (m.err) {
@@ -183,8 +185,11 @@
   function main() {
 
   // ---------------------------------------------------------------------------
-  // Réglages
+  // Réglages (v1.8.0 : toutes les valeurs du script sont ici, et se changent
+  // sans toucher au code : bouton ⚙ du bandeau, ou menu Tampermonkey → « ⚙ Réglages »)
   // ---------------------------------------------------------------------------
+  // Les durées sont en millisecondes (ms), sauf mention contraire. [a, b] :
+  // tirage au hasard entre a et b.
 
   const CONFIG = {
     // Durées proposées par le site, en minutes. v0.19.0 : toutes peuvent être
@@ -219,6 +224,10 @@
     // plus sur le prix « Normal ».
     minLaterGainPct: 0.02,
     minLaterGain: 10,
+    // Départs essayés : toutes les laterStepMin minutes, jusqu'à laterMaxMin
+    // minutes plus tard.
+    laterStepMin: 30,
+    laterMaxMin: 720,
     // Heures conseillées calées sur la courbe de référence (le graphique du
     // profil par défaut) plutôt que sur la base mesurée (v0.19.0, demande de
     // l'utilisateur). La base mesurée reste affichée dans le diagnostic.
@@ -255,6 +264,18 @@
       minCards: 8,
       ownMinSales: 5,
       baselineDays: 15,
+      // Vente shiny mesurée si au moins baselineMin ventes normales à ±baselineDays jours.
+      baselineMin: 3,
+      // Intervalle de confiance : tirages du bootstrap, quantiles (0,05 ; 0,95 = 90 %).
+      bootstrap: 500,
+      ciRange: [0.05, 0.95],
+      cacheMs: 60000,
+      // Enchère shiny terminée depuis followAfterSec secondes (et moins de
+      // followDays jours) : carte relue pour trouver le prix de la vente,
+      // followMax cartes à la fois au plus.
+      followAfterSec: 180,
+      followDays: 3,
+      followMax: 5,
     },
     // Aide à l'achat (pastilles sur /marketplace).
     buy: {
@@ -281,9 +302,405 @@
       // plus) ; rouge franc à 0 étoile, vert franc au maximum.
       starStep: 100,
       starMax: 3,
+      // Page d'une enchère : enchère relue toutes les… ; page ouverte
+      // directement : identifiants des ventes chargées par la page essayés.
+      auctionReadMs: 20000,
+      pageSeenIds: 3,
+    },
+    // Ventes retenues et prix conseillés.
+    stats: {
+      // Ventes des windowDays derniers jours ; s'il y en a moins de minRecent,
+      // les fallbackSales dernières.
+      windowDays: 7,
+      minRecent: 5,
+      fallbackSales: 10,
+      // Prix écartés (dès outlierMinSales ventes) : plus de outlierFactor fois
+      // la médiane, ou moins de la médiane divisée par outlierFactor.
+      outlierMinSales: 5,
+      outlierFactor: 3,
+      // Conseil de prix à partir de minSales ventes ; « Ambitieux » à partir de
+      // ambitiousMinSales, borné entre ces quantiles (P60 et P75).
+      minSales: 3,
+      ambitiousMinSales: 8,
+      ambitiousRange: [0.6, 0.75],
+      // « Vente rapide » = ce quantile des ventes (0,25 = P25) ; le plafond
+      // revente reste au moins capQuickGap sous la vente rapide.
+      quickQuantile: 0.25,
+      capQuickGap: 1,
+      // Confiance : faible sous la 1re valeur de ventes, moyenne sous la 2e.
+      confidence: [8, 20],
+      // Ventes comptées pour 💤 (jours) et pour 🔥 (heures) ; écart mesuré
+      // entre la dernière vente et la spanSales-ième.
+      countDays: 7,
+      hotHours: 48,
+      spanSales: 10,
+      // Conseils d'une carte recalculés au plus toutes les…
+      memoMs: 60000,
+    },
+    // Base horaire (heure de fin des enchères).
+    profile: {
+      // Profil par défaut, de 0 h à 23 h (heure de Paris) : écart de prix en
+      // log (−0,08 ≈ −8 %). Sert de courbe de référence (lissée) et de repère
+      // pour les heures peu vendues.
+      hourly: [0, -0.03, -0.06, -0.08, -0.08, -0.08, -0.07, -0.05, -0.03, -0.02, -0.01, 0,
+        0.01, 0.01, 0, 0, 0, 0.01, 0.02, 0.04, 0.05, 0.05, 0.05, 0.03],
+      // Lissage : poids des heures voisines, centrés (±2 h par défaut).
+      smoothKernel: [1, 2, 3, 2, 1],
+      // Base mesurée : cartes d'au moins minCardSales ventes ; chaque vente
+      // comparée à la médiane de la carte à ±nearDays jours (nearMin ventes
+      // au moins), écart borné à ±maxLogGap (0,4 ≈ ±40 %).
+      minCardSales: 5,
+      nearDays: 3,
+      nearMin: 4,
+      maxLogGap: 0.4,
+      // Cartes gardées pour la base ; base recalculée au plus toutes les (minutes).
+      cards: 300,
+      cacheMin: 10,
+    },
+    // Fiche d'une carte (collection).
+    sheet: {
+      // Attentes après un clic (onglet, formulaire), par pas de stepMs.
+      stepMs: 100,
+      marketWaitMs: 6000,
+      marketSettleMs: 150,
+      tabWaitMs: 2000,
+      formWaitMs: 4000,
+      // Identifiants récents essayés pour reconnaître la carte.
+      tryIds: 4,
+      // Carte non trouvée : message après autoOpenDelayMs + giveUpMs.
+      giveUpMs: 6000,
+      // Conseils recalculés au plus toutes les…
+      recomputeMs: 60000,
+    },
+    // Lectures des ventes (pastilles, fiche, plafonds de la télécommande).
+    read: {
+      // Délai maximal d'une requête au site (par le relais de la page ou directe).
+      timeoutMs: 30000,
+      // Historique réutilisé s'il a moins de (ms) (fiche, page d'une enchère).
+      salesMaxAgeMs: 300000,
+      // Départs espacés de (ms, min ; max).
+      spacingMs: [40, 160],
+      // Échec (hors refus) : nouvel essai après failRetryMs, doublé à chaque
+      // échec, failRetryMaxMs au plus ; carte oubliée après forget404 « 404 ».
+      failRetryMs: 5000,
+      failRetryMaxMs: 60000,
+      forget404: 3,
+      // Résumé d'une carte recalculé après une lecture s'il a plus de (ms).
+      resummarizeMs: 60000,
+      // « Mes enchères » (achats) relue au plus toutes les (heures) ; échec :
+      // nouvel essai après (minutes).
+      mineEveryHours: 6,
+      mineRetryMin: 30,
+    },
+    // Mémoires (tailles maximales) et écritures groupées dans Tampermonkey.
+    mem: {
+      salesCacheMax: 200,
+      seenIdsMax: 20,
+      shinyAuctionsMax: 4000,
+      shinyPairsMax: 6000,
+      joinCheckMax: 400,
+      boughtMax: 2000,
+      flushSalesMs: 5000,
+      flushSummariesMs: 15000,
+      flushSmallMs: 5000,
+      flushIdsMs: 3000,
+    },
+    // Couleurs des pastilles (CSS). Teintes : 0 = rouge, 120 = vert.
+    colors: {
+      discard: 'hsl(275, 70%, 58%)',
+      shinyUnknown: '#94a3b8',
+      unknown: '#a1a1aa',
+      hueLow: 0,
+      hueHigh: 120,
+      starSaturation: 85,
+      starLightness: 50,
+      valueSaturation: 75,
+      valueLightness: 50,
+      valueDip: 6,
+      staleOpacity: 0.7,
+    },
+    // Affichage.
+    ui: {
+      // Réaction aux changements de la page ; contrôle régulier.
+      tickDelayMs: 60,
+      beatMs: 700,
+      // Message de « Remplir » (ms).
+      fillMsgMs: 2500,
+      // Pastilles : décalage sous le haut de la carte, marge autour de l'écran
+      // pour lire d'abord les cartes visibles (pixels).
+      badgeTopPx: 6,
+      nearScreenPx: 100,
+    },
+    // Détection de la page (avancé).
+    detect: {
+      minPx: 2,
+      minOpacity: 0.05,
+      shinyTextMax: 20,
+      rarityTextMax: 14,
+      inputDepth: 4,
+    },
+    // Technique.
+    tech: {
+      timerBackupMs: 60000,
+      ownUrlMs: 5000,
+      dupCheckMs: 5000,
+    },
+    // Portier de débit (même réglage conseillé dans la surenchère et la
+    // version téléphone ; chaque script garde le sien).
+    gate: {
+      // Plafonds de départ, maximaux et minimaux : requêtes par fenêtre courte
+      // (shortWindowSec) et par fenêtre longue (longWindowSec).
+      shortWindowSec: 10,
+      longWindowSec: 60,
+      startShort: 8,
+      startLong: 40,
+      topShort: 25,
+      topLong: 130,
+      floorShort: 2,
+      floorLong: 8,
+      // Parts des plafonds : lectures de fond, nettoyage de la collection.
+      shareBulk: 0.7,
+      shareClean: 0.9,
+      // Marge ajoutée à chaque attente ; une même requête vue deux fois à
+      // moins de sameRequestMs ne compte qu'une fois.
+      spacingMs: 25,
+      sameRequestMs: 1500,
+      // Montée : +climbShort / +climbLong toutes les climbEveryMs, si la
+      // demande a dépassé le plafond depuis moins de saturatedMs.
+      climbEveryMs: 30000,
+      saturatedMs: 15000,
+      climbShort: 2,
+      climbLong: 8,
+      // Refus : « rapprochés » à moins de strikeWindowMs. 1er → pause1Ms ;
+      // 2e → plafonds × cut2, pause2Ms ; 3e → plafonds × cut3 fixés unlockMin
+      // minutes, pause3Ms (doublée si ça continue dans calmWindowMin minutes,
+      // pause3MaxMs au plus). 503 : pause503Ms, doublée, pause503MaxMs au plus.
+      strikeWindowMs: 120000,
+      pause1Ms: 10000,
+      cut2: 0.9,
+      pause2Ms: 30000,
+      cut3: 0.8,
+      unlockMin: 60,
+      pause3Ms: 120000,
+      pause3MaxMs: 480000,
+      calmWindowMin: 15,
+      pause503Ms: 30000,
+      pause503MaxMs: 300000,
+      // Requêtes récentes transmises à un nouvel onglet.
+      shareListMax: 300,
+      // Attente entre deux demandes au portier (min, max).
+      waitMs: [50, 5000],
+    },
+    // Télécommande du bot de surenchère : plafond manuel maximal, lectures de
+    // « Mes enchères », relève des choix (ntfy.sh), contrôle des choix reçus,
+    // plafonds recalculés, enchère finie encore affichée, liste touchée.
+    remote: {
+      maxManualCap: 10000,
+      readMs: [120000, 300000],
+      pullMs: [20000, 40000],
+      ntfyTimeoutMs: 15000,
+      modePriority: 1,
+      futureMin: 5,
+      pastHours: 13,
+      capsMaxAgeMs: 600000,
+      keepEndedMs: 60000,
+      touchPauseMs: 1500,
     },
     debug: true,
   };
+  // Libellés de la fenêtre « ⚙ Réglages », par groupe (voir makeSettings).
+  const HELP = [
+    ['Prix conseillés', {
+      'stats.windowDays': 'Ventes retenues : derniers (jours)',
+      'stats.minRecent': 'Moins de ventes récentes que : on prend les dernières ventes',
+      'stats.fallbackSales': 'Dernières ventes prises à défaut',
+      'stats.outlierMinSales': 'Prix aberrants écartés à partir de (ventes)',
+      'stats.outlierFactor': 'Prix aberrant : plus de N fois la médiane, ou moins de la médiane / N [>0]',
+      'stats.minSales': 'Conseil de prix à partir de (ventes)',
+      'stats.quickQuantile': '« Vente rapide » = ce quantile des ventes (0,25 = P25) [0-1]',
+      'stats.ambitiousMinSales': '« Ambitieux » à partir de (ventes)',
+      'stats.ambitiousRange': '« Ambitieux » borné entre ces quantiles (min ; max) [0-1]',
+      relistKeep: '« Ambitieux » : part du prix gardée à chaque remise en vente [0-1]',
+      'stats.confidence': 'Confiance faible sous, moyenne sous (ventes ; ventes)',
+      'stats.memoMs': 'Conseils d’une carte recalculés au plus toutes les (ms)',
+    }],
+    ['Durée et heure de fin', {
+      durations: 'Durées possibles (minutes) [liste]',
+      longMinAbove: 'Médiane au-dessus de (wikibidous) : pas de durée courte',
+      longMinMinutes: '… durée minimale alors (minutes)',
+      minLongerGainPct: 'Durée plus courte si son prix estimé est à moins de (part du meilleur) [0-1]',
+      minLaterGainPct: '« Lancer plus tard » : gain minimal (part du prix « Normal ») [0-1]',
+      minLaterGain: '« Lancer plus tard » : gain minimal (wikibidous)',
+      laterStepMin: '« Lancer plus tard » : départs essayés toutes les (minutes) [>0]',
+      laterMaxMin: '« Lancer plus tard » : jusqu’à (minutes plus tard)',
+      wakeFromHour: '« Lancer plus tard » : départ pas avant (heure)',
+      wakeToHour: '« Lancer plus tard » : départ avant (heure)',
+      useMeasuredProfile: 'Heures conseillées selon la base mesurée (sinon courbe de référence)',
+      'profile.hourly': 'Profil horaire par défaut, 0 h à 23 h (écart en log, 0,05 ≈ +5 %)',
+      'profile.smoothKernel': 'Lissage : poids des heures voisines, centrés [liste] [>0]',
+      keepSalesDays: 'Base mesurée : ventes des derniers (jours)',
+      profilePriorWeight: 'Base mesurée : poids du profil par défaut (ventes pondérées)',
+      'profile.minCardSales': 'Base mesurée : cartes d’au moins (ventes)',
+      'profile.nearDays': 'Base mesurée : comparaison aux ventes à ± (jours)',
+      'profile.nearMin': 'Base mesurée : ventes voisines au moins',
+      'profile.maxLogGap': 'Base mesurée : écart borné à ± (log ; 0,4 ≈ 40 %)',
+      'profile.cards': 'Base mesurée : cartes gardées',
+      'profile.cacheMin': 'Base mesurée : recalculée au plus toutes les (minutes)',
+    }],
+    ['Valeur des cartes (💤, 🔥, sans valeur)', {
+      thinSales7d: '💤 « Se vend peu » : moins de (ventes sur la période ci-dessous)',
+      'stats.countDays': '💤 : période comptée (jours)',
+      thinSpanDays: '💤 : ou plus de (jours) entre la dernière vente et la N-ième',
+      'stats.spanSales': '💤 : N (rang de la vente comparée)',
+      hotSales48h: '🔥 « Se vend beaucoup » : au moins (ventes sur la période ci-dessous)',
+      'stats.hotHours': '🔥 : période comptée (heures)',
+      worthlessBelow: 'Sans valeur : prix « Normal » sous (wikibidous)',
+      thinWorthlessBelow: 'Sans valeur si 💤 : prix « Normal » sous (wikibidous)',
+      valueGreen: 'Pastille de la collection verte à partir de (wikibidous)',
+      collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
+    }],
+    ['Aide à l’achat (marché)', {
+      'buy.minSales': 'Plafond revente à partir de (ventes)',
+      'buy.waitCost': '« À garder » : coût d’attendre une autre occasion (part de la médiane)',
+      'buy.resaleMargin': 'Marge visée sur la valeur de revente (0,25 = plafond à 80 %)',
+      'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
+      'stats.capQuickGap': 'Plafond revente au moins sous la vente rapide de (wikibidous)',
+      'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
+      'buy.cacheMinutes': 'Historique gardé en mémoire (minutes)',
+      'buy.summaryHours': 'Pastilles : valeur relue si plus vieille que (heures)',
+      'buy.starStep': 'Étoiles : une demi-étoile par tranche de (wikibidous) [>0]',
+      'buy.starMax': 'Étoiles : au plus [>0]',
+      'buy.auctionReadMs': 'Page d’une enchère : relue toutes les (ms)',
+      'buy.pageSeenIds': 'Page ouverte directement : ventes chargées par la page essayées',
+      autoOpenMarket: null,
+      autoOpenDelayMs: 'Carte inconnue : attente avant d’ouvrir « Marché » (ms)',
+    }],
+    ['Cartes shiny', {
+      'shiny.minCards': 'Prime mesurée par rareté dès (cartes)',
+      'shiny.ownMinSales': 'Carte shiny estimée sur ses propres ventes dès (ventes)',
+      'shiny.baselineDays': 'Vente shiny comparée aux ventes normales à ± (jours)',
+      'shiny.baselineMin': 'Ventes normales au moins pour la comparaison',
+      'shiny.bootstrap': 'Intervalle de confiance : tirages [>0]',
+      'shiny.ciRange': 'Intervalle de confiance : quantiles (0,05 ; 0,95 = 90 %) [0-1]',
+      'shiny.cacheMs': 'Prime recalculée au plus toutes les (ms)',
+      'shiny.followAfterSec': 'Enchère shiny finie : carte relue après (secondes)',
+      'shiny.followDays': 'Enchère shiny finie : relue si finie depuis moins de (jours)',
+      'shiny.followMax': 'Enchères shiny relues à la fois au plus',
+    }],
+    ['Fiche d’une carte', {
+      'sheet.stepMs': 'Attentes après un clic : contrôle toutes les (ms) [>0]',
+      'sheet.marketWaitMs': 'Onglet « Marché » ouvert : attente des ventes (ms)',
+      'sheet.marketSettleMs': 'Onglet « Marché » : pause avant de revenir (ms)',
+      'sheet.tabWaitMs': 'Retour sur « Détails » : attente (ms)',
+      'sheet.formWaitMs': '« Mettre aux enchères » : attente du formulaire (ms)',
+      'sheet.tryIds': 'Identifiants récents essayés pour reconnaître la carte',
+      'sheet.giveUpMs': 'Carte non trouvée : message après (ms)',
+      'sheet.recomputeMs': 'Conseils recalculés au plus toutes les (ms)',
+    }],
+    ['Lectures des ventes', {
+      'read.timeoutMs': 'Délai maximal d’une requête au site (ms)',
+      'read.salesMaxAgeMs': 'Historique réutilisé s’il a moins de (ms)',
+      'read.spacingMs': 'Départs espacés de (ms, min ; max)',
+      'read.failRetryMs': 'Échec : nouvel essai après (ms, doublé à chaque échec)',
+      'read.failRetryMaxMs': 'Échec : attente maximale (ms)',
+      'read.forget404': 'Carte introuvable (404) : oubliée après (échecs)',
+      'read.resummarizeMs': 'Résumé recalculé après une lecture s’il a plus de (ms)',
+      'read.mineEveryHours': '« Mes enchères » (achats) relue au plus toutes les (heures)',
+      'read.mineRetryMin': '« Mes enchères » : nouvel essai après un échec (minutes)',
+    }],
+    ['Mémoires', {
+      maxIds: 'Titres → identifiant gardés',
+      maxSummaries: 'Résumés de cartes gardés',
+      'mem.salesCacheMax': 'Historiques complets gardés en mémoire vive',
+      'mem.seenIdsMax': 'Identifiants récents vus dans les requêtes',
+      'mem.shinyAuctionsMax': 'Enchères shiny gardées',
+      'mem.shinyPairsMax': 'Ventes shiny mesurées gardées',
+      'mem.joinCheckMax': 'Contrôles ventes ↔ enchères gardés',
+      'mem.boughtMax': 'Achats gardés',
+      'mem.flushSalesMs': 'Écriture groupée des ventes après (ms)',
+      'mem.flushSummariesMs': 'Écriture groupée des résumés après (ms)',
+      'mem.flushSmallMs': 'Écriture groupée des petites mémoires après (ms)',
+      'mem.flushIdsMs': 'Écriture groupée des titres après (ms)',
+    }],
+    ['Couleurs', {
+      'colors.discard': 'À défausser (couleur CSS)',
+      'colors.shinyUnknown': 'Shiny sans prime mesurée (couleur CSS)',
+      'colors.unknown': 'Valeur inconnue (couleur CSS)',
+      'colors.hueLow': 'Teinte du bas de l’échelle (0 = rouge)',
+      'colors.hueHigh': 'Teinte du haut de l’échelle (120 = vert)',
+      'colors.starSaturation': 'Étoiles : saturation (%)',
+      'colors.starLightness': 'Étoiles : luminosité (%)',
+      'colors.valueSaturation': 'Collection : saturation (%)',
+      'colors.valueLightness': 'Collection : luminosité (%)',
+      'colors.valueDip': 'Collection : assombrissement au milieu de l’échelle (%)',
+      'colors.staleOpacity': 'Valeur ancienne : opacité de la pastille [0-1]',
+    }],
+    ['Affichage', {
+      'ui.tickDelayMs': 'Réaction aux changements de la page après (ms)',
+      'ui.beatMs': 'Contrôle régulier de la page toutes les (ms) [>0]',
+      'ui.fillMsgMs': 'Message de « Remplir » affiché (ms)',
+      'ui.badgeTopPx': 'Pastilles : décalage sous le haut de la carte (pixels)',
+      'ui.nearScreenPx': 'Cartes lues d’abord : à l’écran ou à moins de (pixels)',
+    }],
+    ['Détection de la page (avancé)', {
+      'detect.minPx': 'Élément visible : taille minimale (pixels)',
+      'detect.minOpacity': 'Élément visible : opacité minimale [0-1]',
+      'detect.shinyTextMax': 'Étoile ✦ de la fiche : texte de (caractères) au plus',
+      'detect.rarityTextMax': 'Rareté : texte de (caractères) au plus',
+      'detect.inputDepth': 'Montant à côté de « Miser » : parents examinés',
+    }],
+    ['Portier de débit (requêtes vers le site)', {
+      'gate.shortWindowSec': 'Fenêtre courte (secondes) [>0]',
+      'gate.longWindowSec': 'Fenêtre longue (secondes) [>0]',
+      'gate.startShort': 'Requêtes par fenêtre courte : au départ [>0]',
+      'gate.startLong': 'Requêtes par fenêtre longue : au départ [>0]',
+      'gate.topShort': 'Requêtes par fenêtre courte : au plus [>0]',
+      'gate.topLong': 'Requêtes par fenêtre longue : au plus [>0]',
+      'gate.floorShort': 'Requêtes par fenêtre courte : jamais moins de [>0]',
+      'gate.floorLong': 'Requêtes par fenêtre longue : jamais moins de [>0]',
+      'gate.shareBulk': 'Part des plafonds pour les lectures de fond [0-1]',
+      'gate.shareClean': 'Part des plafonds pour le nettoyage (ordinateur seulement ; gardée pour un portier identique) [0-1]',
+      'gate.spacingMs': 'Marge ajoutée à chaque attente (ms)',
+      'gate.sameRequestMs': 'Même requête vue deux fois : comptée une fois à moins de (ms)',
+      'gate.climbEveryMs': 'Montée des plafonds : au plus toutes les (ms)',
+      'gate.saturatedMs': 'Montée seulement si la demande a dépassé le plafond depuis moins de (ms)',
+      'gate.climbShort': 'Montée : + requêtes par fenêtre courte',
+      'gate.climbLong': 'Montée : + requêtes par fenêtre longue',
+      'gate.strikeWindowMs': 'Refus « rapprochés » : à moins de (ms)',
+      'gate.pause1Ms': '1er refus : pause (ms)',
+      'gate.cut2': '2e refus rapproché : plafonds multipliés par [0-1]',
+      'gate.pause2Ms': '2e refus rapproché : pause (ms)',
+      'gate.cut3': '3e refus rapproché : plafonds multipliés par (puis fixés) [0-1]',
+      'gate.unlockMin': 'Plafonds fixés après des refus pendant (minutes)',
+      'gate.pause3Ms': '3e refus rapproché : pause (ms, doublée si ça continue)',
+      'gate.pause3MaxMs': '3e refus rapproché : pause maximale (ms)',
+      'gate.calmWindowMin': 'Pause doublée si les refus continuent dans les (minutes)',
+      'gate.pause503Ms': 'Site surchargé (503) : pause (ms, doublée à chaque fois)',
+      'gate.pause503MaxMs': 'Site surchargé (503) : pause maximale (ms)',
+      'gate.shareListMax': 'Requêtes récentes transmises à un nouvel onglet',
+      'gate.waitMs': 'Attente entre deux demandes au portier (ms, min ; max)',
+    }],
+    ['Télécommande des enchères', {
+      'remote.maxManualCap': 'Plafond « Manuel » : montant maximal accepté (wikibidous)',
+      'remote.readMs': '« Mes enchères » relue toutes les (ms, min ; max)',
+      'remote.pullMs': 'Relève des choix de la tablette toutes les (ms, min ; max)',
+      'remote.ntfyTimeoutMs': 'ntfy.sh : délai maximal d’une requête (ms)',
+      'remote.modePriority': 'ntfy.sh : priorité des choix de plafond (1 à 5)',
+      'remote.futureMin': 'Choix reçu refusé s’il est daté de plus de (minutes) dans le futur',
+      'remote.pastHours': 'Choix reçu refusé s’il date de plus de (heures)',
+      'remote.capsMaxAgeMs': 'Plafonds d’une enchère recalculés au plus toutes les (ms)',
+      'remote.keepEndedMs': 'Enchère finie encore affichée pendant (ms)',
+      'remote.touchPauseMs': 'Liste touchée ou défilée : pas redessinée pendant (ms)',
+    }],
+    ['Technique', {
+      debug: 'Messages [WV] dans la console du navigateur (diagnostic)',
+      'tech.timerBackupMs': 'Minuterie sans réponse : relais par setTimeout après (ms)',
+      'tech.ownUrlMs': 'Lectures du script ignorées dans les réponses de la page pendant (ms)',
+      'tech.dupCheckMs': 'Recherche de copies du script en double après (ms)',
+    }],
+  ];
+  const settings = makeSettings(CONFIG, HELP, 'wvm.settings', 'Aide mobile');
+  requestTimeoutMs = CONFIG.read.timeoutMs;
 
   const RARITIES = ['C', 'PC', 'R', 'SR', 'UR', 'L'];
   const KEY_SALES = 'wv.sales';
@@ -356,32 +773,34 @@
     const same = sales
       .filter((s) => (!rarity || s.rarity === rarity) && isShinySale(s) === shiny)
       .sort((a, b) => tsOf(b) - tsOf(a));
-    let pool = same.filter((s) => now - tsOf(s) <= 7 * DAY);
-    let period = '7 derniers jours';
-    if (pool.length < 5) {
-      pool = same.slice(0, 10);
+    const S = CONFIG.stats;
+    let pool = same.filter((s) => now - tsOf(s) <= S.windowDays * DAY);
+    let period = `${S.windowDays} derniers jours`;
+    if (pool.length < S.minRecent) {
+      pool = same.slice(0, S.fallbackSales);
       period = `${pool.length} dernières ventes`;
     }
     let prices = pool.map((s) => s.final_price).sort(byNumber);
     const rawMedian = prices.length ? quantile(prices, 0.5) : 0;
-    const dropped = prices.length >= 5 ? prices.filter((p) => p > 3 * rawMedian || p < rawMedian / 3) : [];
+    const dropped = prices.length >= S.outlierMinSales ? prices.filter((p) => p > S.outlierFactor * rawMedian || p < rawMedian / S.outlierFactor) : [];
     if (dropped.length) prices = prices.filter((p) => !dropped.includes(p));
     return { same, pool, period, dropped, prices };
   }
 
   // Nombre de ventes de la même rareté sur les 7 derniers jours (liquidité).
   const sales7d = (sales, rarity, now, shiny = false) => sales
-    .filter((s) => (!rarity || s.rarity === rarity) && now - tsOf(s) <= 7 * DAY && isShinySale(s) === shiny).length;
+    .filter((s) => (!rarity || s.rarity === rarity) && now - tsOf(s) <= CONFIG.stats.countDays * DAY && isShinySale(s) === shiny).length;
   // Même chose sur 48 h : 🔥 « se vend beaucoup » dès hotSales48h ventes.
   const sales48h = (sales, rarity, now, shiny = false) => sales
-    .filter((s) => (!rarity || s.rarity === rarity) && now - tsOf(s) <= 2 * DAY && isShinySale(s) === shiny).length;
+    .filter((s) => (!rarity || s.rarity === rarity) && now - tsOf(s) <= CONFIG.stats.hotHours * 3600000 && isShinySale(s) === shiny).length;
   const isHot = (sales48) => sales48 != null && sales48 >= CONFIG.hotSales48h;
   // Carte peu vendue et peu chère : ne vaut pas une place sur le marché.
   // Jours entre la dernière vente et la 10e dernière (même rareté, même
   // version) ; null s'il y en a moins de 10.
   function span10d(sales, rarity, shiny = false) {
     const t = sales.filter((s) => (!rarity || s.rarity === rarity) && isShinySale(s) === shiny).map(tsOf).sort((a, b) => b - a);
-    return t.length >= 10 ? Math.round(((t[0] - t[9]) / DAY) * 10) / 10 : null;
+    const n = CONFIG.stats.spanSales;
+    return t.length >= n ? Math.round(((t[0] - t[n - 1]) / DAY) * 10) / 10 : null;
   }
   // 💤 « se vend peu », quel que soit le prix. span10 : undefined = pas encore
   // mesuré (résumé d'avant la v0.14), null = moins de 10 ventes.
@@ -390,16 +809,16 @@
   // Sans valeur : à défausser (fiche, nettoyage), pastille violette (sous UR).
   const worthless = (normal, thin) => normal === null || normal < CONFIG.worthlessBelow || (thin && normal < CONFIG.thinWorthlessBelow);
   // Explication du 💤 (encarts, infobulles).
-  const thinText = (sales7, span10) => `${sales7 ?? '?'} vente${sales7 > 1 ? 's' : ''} en 7 jours`
-    + (span10 === null ? ', moins de 10 ventes en tout' : span10 !== undefined ? `, 10 dernières ventes sur ${String(span10).replace('.', ',')} jours` : '');
+  const thinText = (sales7, span10) => `${sales7 ?? '?'} vente${sales7 > 1 ? 's' : ''} en ${CONFIG.stats.countDays} jours`
+    + (span10 === null ? `, moins de ${CONFIG.stats.spanSales} ventes en tout` : span10 !== undefined ? `, ${CONFIG.stats.spanSales} dernières ventes sur ${String(span10).replace('.', ',')} jours` : '');
 
   function priceAdvice(sales, rarity, now, shiny = false, poolData = salesPool(sales, rarity, now, shiny)) {
     const { same, pool, period, dropped, prices } = poolData;
-    if (pool.length < 3) return { enough: false, n: pool.length, total: same.length };
+    if (pool.length < CONFIG.stats.minSales) return { enough: false, n: pool.length, total: same.length };
 
     const n = prices.length;
     const share = (p) => countAtLeast(prices, p) / n;
-    const p25 = quantile(prices, 0.25);
+    const p25 = quantile(prices, CONFIG.stats.quickQuantile);
     const median = quantile(prices, 0.5);
 
     // « Normal » = la médiane exacte des ventes retenues (v0.21.0, à la demande
@@ -411,9 +830,9 @@
     // On garde le p qui maximise V, borné entre P60 et P75 (25 à 40 % des
     // ventes l'ont atteint) ; seulement à partir de 8 ventes.
     let ambitiousRaw = null;
-    if (n >= 8) {
+    if (n >= CONFIG.stats.ambitiousMinSales) {
       ambitiousRaw = resaleValue(prices).price;
-      ambitiousRaw = Math.min(Math.max(ambitiousRaw, quantile(prices, 0.6)), quantile(prices, 0.75));
+      ambitiousRaw = Math.min(Math.max(ambitiousRaw, quantile(prices, CONFIG.stats.ambitiousRange[0])), quantile(prices, CONFIG.stats.ambitiousRange[1]));
     }
     // Prix exacts, sans arrondi : un prix précis est plus vendeur.
     const quick = Math.max(1, Math.round(p25));
@@ -434,7 +853,7 @@
       normalShare: share(normal),
       ambitious,
       ambitiousShare: ambitious === null ? null : share(ambitious),
-      confidence: n < 8 ? 'faible' : n < 20 ? 'moyenne' : 'bonne',
+      confidence: n < CONFIG.stats.confidence[0] ? 'faible' : n < CONFIG.stats.confidence[1] ? 'moyenne' : 'bonne',
     };
   }
 
@@ -473,16 +892,16 @@
   function buyAdvice(sales, rarity, now, shiny = false, poolData = salesPool(sales, rarity, now, shiny)) {
     const { pool, period, prices } = poolData;
     const n = prices.length;
-    if (pool.length < 3 || !n) return { enough: false, n };
+    if (pool.length < CONFIG.stats.minSales || !n) return { enough: false, n };
     const median = quantile(prices, 0.5);
     const advice = { enough: true, n, period, median, min: prices[0], max: prices[n - 1], keepCap: null, resaleCap: null, resale: null,
-      quick: Math.max(1, Math.round(quantile(prices, 0.25))) };
+      quick: Math.max(1, Math.round(quantile(prices, CONFIG.stats.quickQuantile))) };
     if (n >= CONFIG.buy.minSales) {
       advice.keepCap = Math.floor(reservationPrice(prices, CONFIG.buy.waitCost * median));
       advice.resale = resaleValue(prices).value;
       // Toujours sous la vente rapide (v0.21.0) : revendue vite, la carte
       // rapporte encore quelque chose.
-      advice.resaleCap = Math.min(Math.floor(advice.resale / (1 + CONFIG.buy.resaleMargin)), advice.quick - 1);
+      advice.resaleCap = Math.min(Math.floor(advice.resale / (1 + CONFIG.buy.resaleMargin)), advice.quick - CONFIG.stats.capQuickGap);
     }
     // Rang centile d'un prix : part des ventes moins chères (ex æquo pour moitié).
     advice.percentile = (price) => {
@@ -502,7 +921,7 @@
     if (!byKey) adviceMemo.set(sales, (byKey = new Map()));
     const key = `${rarity}|${shiny}`;
     const hit = byKey.get(key);
-    if (hit && now - hit.at < 60000) return hit;
+    if (hit && now - hit.at < CONFIG.stats.memoMs) return hit;
     const pool = salesPool(sales, rarity, now, shiny);
     const out = { at: now, price: priceAdvice(sales, rarity, now, shiny, pool), buy: buyAdvice(sales, rarity, now, shiny, pool), sales7: sales7d(sales, rarity, now, shiny),
       sales48: sales48h(sales, rarity, now, shiny), span10: span10d(sales, rarity, shiny) };
@@ -518,13 +937,21 @@
 
   // Profil par défaut, pour les heures sans données (écart de prix en log,
   // heure de Paris, de 0 h à 23 h) : nuit défavorable, soirée favorable.
-  const DEFAULT_HOURLY = [0, -0.03, -0.06, -0.08, -0.08, -0.08, -0.07, -0.05, -0.03, -0.02, -0.01, 0,
-    0.01, 0.01, 0, 0, 0, 0.01, 0.02, 0.04, 0.05, 0.05, 0.05, 0.03];
-  // Courbe de référence : ce profil lissé sur ±2 h et recentré (graphique
-  // « prix selon l'heure de fin »). Elle ordonne les heures : 21 h > 11 h,
-  // 8 h > 4 h, 19 h > 23 h…
+  // Réglable (CONFIG.profile.hourly).
+  const DEFAULT_HOURLY = CONFIG.profile.hourly;
+  // Lissage circulaire sur 24 h : moyenne pondérée des heures voisines
+  // (CONFIG.profile.smoothKernel, centré ; par défaut 1, 2, 3, 2, 1 = ±2 h).
+  function smooth24(values) {
+    const kernel = CONFIG.profile.smoothKernel;
+    const half = Math.floor(kernel.length / 2);
+    const total = kernel.reduce((a, b) => a + b, 0);
+    return values.map((_, h) => kernel.reduce((acc, c, i) => acc + c * values[(((h + i - half) % 24) + 24) % 24], 0) / total);
+  }
+  // Courbe de référence : ce profil lissé et recentré (graphique « prix selon
+  // l'heure de fin »). Elle ordonne les heures : 21 h > 11 h, 8 h > 4 h,
+  // 19 h > 23 h…
   const GRAPH_HOURLY = (() => {
-    const s = DEFAULT_HOURLY.map((_, h) => [1, 2, 3, 2, 1].reduce((acc, c, i) => acc + c * DEFAULT_HOURLY[(h + i + 22) % 24], 0) / 9);
+    const s = smooth24(DEFAULT_HOURLY);
     const mean = s.reduce((a, b) => a + b, 0) / 24;
     return s.map((v) => v - mean);
   })();
@@ -549,7 +976,7 @@
       const groups = {};
       for (const [ts, price, rarity] of entry.s) if (price > 0) (groups[rarity] ||= []).push([ts * 1000, price]);
       for (const list of Object.values(groups)) {
-        if (list.length < 5) continue;
+        if (list.length < CONFIG.profile.minCardSales) continue;
         list.sort((a, b) => a[0] - b[0]);
         const overall = quantile(list.map((x) => x[1]).sort(byNumber), 0.5);
         const w = 1 / Math.sqrt(list.length);
@@ -557,14 +984,14 @@
         let hi = 0;
         for (let i = 0; i < list.length; i++) {
           const [ts, price] = list[i];
-          while (list[lo][0] < ts - 3 * DAY) lo++;
-          while (hi < list.length && list[hi][0] <= ts + 3 * DAY) hi++;
+          while (list[lo][0] < ts - CONFIG.profile.nearDays * DAY) lo++;
+          while (hi < list.length && list[hi][0] <= ts + CONFIG.profile.nearDays * DAY) hi++;
           if (now - ts > CONFIG.keepSalesDays * DAY) continue;
           const near = [];
           for (let j = lo; j < hi; j++) if (j !== i) near.push(list[j][1]);
-          const ref = near.length >= 4 ? quantile(near.sort(byNumber), 0.5) : overall;
+          const ref = near.length >= CONFIG.profile.nearMin ? quantile(near.sort(byNumber), 0.5) : overall;
           const h = parisHour(ts);
-          sum[h] += w * Math.max(-0.4, Math.min(0.4, Math.log(price / ref)));
+          sum[h] += w * Math.max(-CONFIG.profile.maxLogGap, Math.min(CONFIG.profile.maxLogGap, Math.log(price / ref)));
           weight[h] += w;
           used++;
           cards.add(cardId);
@@ -573,7 +1000,7 @@
     }
     const k = CONFIG.profilePriorWeight;
     const raw = sum.map((s, h) => (s + k * DEFAULT_HOURLY[h]) / (weight[h] + k));
-    const smooth = raw.map((_, h) => [1, 2, 3, 2, 1].reduce((acc, c, i) => acc + c * raw[(h + i + 22) % 24], 0) / 9);
+    const smooth = smooth24(raw);
     // Recentré : les prix conseillés, tirés de ventes à toutes les heures,
     // correspondent à l'heure moyenne des ventes (indice 0).
     const total = weight.reduce((a, b) => a + b, 0);
@@ -615,7 +1042,7 @@
     // minLaterGainPct et minLaterGain wikibidous.
     let later = null;
     if (normal) {
-      for (let offset = 30; offset <= 720; offset += 30) {
+      for (let offset = CONFIG.laterStepMin; offset <= CONFIG.laterMaxMin; offset += CONFIG.laterStepMin) {
         const start = now + offset * 60000;
         const startHour = parisHour(start);
         if (startHour < CONFIG.wakeFromHour || startHour >= CONFIG.wakeToHour) continue;
@@ -641,9 +1068,9 @@
   function isVisible(el) {
     if (!el || !el.isConnected) return false;
     const r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) return false;
+    if (r.width < CONFIG.detect.minPx || r.height < CONFIG.detect.minPx) return false;
     const cs = getComputedStyle(el);
-    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > 0.05;
+    return cs.display !== 'none' && cs.visibility !== 'hidden' && Number(cs.opacity) > CONFIG.detect.minOpacity;
   }
 
   function findButton(regex, root = document) {
@@ -722,12 +1149,12 @@
   // d'écran, ou étoile ✦ à côté de la rareté.
   function sheetShiny(container) {
     return isShinyEl(container) || [...container.querySelectorAll('span, div')]
-      .some((e) => !e.children.length && e.textContent.length <= 20 && /✦/.test(e.textContent) && !panel.contains(e));
+      .some((e) => !e.children.length && e.textContent.length <= CONFIG.detect.shinyTextMax && /✦/.test(e.textContent) && !panel.contains(e));
   }
 
   function cardRarity(container) {
     for (const el of container.querySelectorAll('span, div, p')) {
-      if (el.children.length > 0 || el.textContent.length > 14) continue;
+      if (el.children.length > 0 || el.textContent.length > CONFIG.detect.rarityTextMax) continue;
       const code = rarityCode(el.textContent);
       if (code && isVisible(el)) return code;
     }
@@ -762,7 +1189,7 @@
         const i = seenIds.indexOf(id);
         if (i >= 0) seenIds.splice(i, 1);
         seenIds.unshift(id);
-        if (seenIds.length > 20) seenIds.pop();
+        while (seenIds.length > CONFIG.mem.seenIdsMax) seenIds.pop();
       }
     }
   }
@@ -785,7 +1212,7 @@
   function cacheSales(cardId, data) {
     salesCache.delete(cardId);
     salesCache.set(cardId, { at: Date.now(), data });
-    while (salesCache.size > 200) salesCache.delete(salesCache.keys().next().value);
+    while (salesCache.size > CONFIG.mem.salesCacheMax) salesCache.delete(salesCache.keys().next().value);
   }
 
   // kind : 'urgent' (fiche ouverte, page d'une enchère) ou 'bulk' (pastilles,
@@ -795,7 +1222,7 @@
   // Mesures des lectures (diagnostic) : réussites, erreurs par code, durées.
   const readStats = { ok: 0, errors: {}, totalMs: 0, maxMs: 0, recent: [], inflightMax: 0 };
   const ownUrls = new Set(); // lectures du script, ignorées par la lecture des réponses de la page
-  async function fetchSales(cardId, maxAgeMs = 5 * 60000, kind = 'urgent') {
+  async function fetchSales(cardId, maxAgeMs = CONFIG.read.salesMaxAgeMs, kind = 'urgent') {
     const cached = salesCache.get(cardId);
     if (cached && Date.now() - cached.at < maxAgeMs) return cached.data;
     const url = `/api/marketplace/cards/${cardId}/sales`;
@@ -810,7 +1237,7 @@
       readStats.errors.réseau = (readStats.errors.réseau || 0) + 1;
       throw err;
     } finally {
-      setTimeout(() => ownUrls.delete(full), 5000);
+      setTimeout(() => ownUrls.delete(full), CONFIG.tech.ownUrlMs);
     }
     lastFetch = `${url} → ${res.status}`;
     if (!res.ok) {
@@ -860,7 +1287,7 @@
       s: sales.filter((x) => Date.parse(x.settled_at) >= since)
         .map((x) => [Math.round(Date.parse(x.settled_at) / 1000), x.final_price, x.rarity]),
     };
-    if (!flushTimer) flushTimer = setTimeout(flushSales, 5000);
+    if (!flushTimer) flushTimer = setTimeout(flushSales, CONFIG.mem.flushSalesMs);
   }
   function flushSales() {
     clearTimeout(flushTimer);
@@ -869,7 +1296,7 @@
     const store = Object.assign(GM_getValue(KEY_SALES, {}), pendingSales);
     pendingSales = {};
     const ids = Object.keys(store).sort((a, b) => store[b].at - store[a].at);
-    for (const id of ids.slice(300)) delete store[id];
+    for (const id of ids.slice(CONFIG.profile.cards)) delete store[id];
     GM_setValue(KEY_SALES, store);
     profileCache = null;
   }
@@ -877,7 +1304,7 @@
 
   function currentProfile(now) {
     flushSales();
-    if (!profileCache || now - profileCache.at > 10 * 60000) {
+    if (!profileCache || now - profileCache.at > CONFIG.profile.cacheMin * 60000) {
       const measured = buildProfile(GM_getValue(KEY_SALES, {}), now);
       profileCache = { at: now, profile: { ...measured, reference: CONFIG.useMeasuredProfile ? measured.hourly : GRAPH_HOURLY } };
     }
@@ -927,7 +1354,7 @@
     checkJoin(cardId, sales);
     const t = typeof title === 'string' && title ? title : (summaries[cardId] && summaries[cardId].t) || null;
     summaries[cardId] = pendingSummaries[cardId] = { at: now, r, t };
-    if (!summaryTimer) summaryTimer = setTimeout(flushSummaries, 15000);
+    if (!summaryTimer) summaryTimer = setTimeout(flushSummaries, CONFIG.mem.flushSummariesMs);
   }
   function flushSummaries() {
     clearTimeout(summaryTimer);
@@ -978,12 +1405,12 @@
   let shinyPairs = GM_getValue(KEY_SHINY_PAIRS, {});
   let joinCheck = GM_getValue(KEY_JOIN, {});
   let bought = GM_getValue(KEY_BOUGHT, {});
-  const smallStores = { [KEY_SHINY_AUCTIONS]: 4000, [KEY_SHINY_PAIRS]: 6000, [KEY_JOIN]: 400, [KEY_BOUGHT]: 2000 };
+  const smallStores = { [KEY_SHINY_AUCTIONS]: CONFIG.mem.shinyAuctionsMax, [KEY_SHINY_PAIRS]: CONFIG.mem.shinyPairsMax, [KEY_JOIN]: CONFIG.mem.joinCheckMax, [KEY_BOUGHT]: CONFIG.mem.boughtMax };
   const dirtySmall = new Set();
   let smallTimer = null;
   function touch(key) {
     dirtySmall.add(key);
-    if (!smallTimer) smallTimer = setTimeout(flushSmall, 5000);
+    if (!smallTimer) smallTimer = setTimeout(flushSmall, CONFIG.mem.flushSmallMs);
   }
   function flushSmall() {
     clearTimeout(smallTimer);
@@ -1011,7 +1438,7 @@
       const t = tsOf(s);
       const near = sales.filter((x) => x.rarity === s.rarity && !isShinySale(x) && Math.abs(tsOf(x) - t) <= CONFIG.shiny.baselineDays * DAY)
         .map((x) => x.final_price).sort(byNumber);
-      if (near.length < 3 || !(s.final_price > 0)) continue;
+      if (near.length < CONFIG.shiny.baselineMin || !(s.final_price > 0)) continue;
       shinyPairs[s.id] = [cardId, s.rarity, s.final_price, quantile(near, 0.5), Math.round(t / 1000)];
       added++;
     }
@@ -1047,7 +1474,7 @@
     let seed = 20260926;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
     const boots = [];
-    for (let b = 0; b < 500; b++) {
+    for (let b = 0; b < CONFIG.shiny.bootstrap; b++) {
       const sample = Array.from({ length: m }, () => vals[Math.floor(rnd() * m)]).sort(byNumber);
       boots.push(quantile(sample, 0.5));
     }
@@ -1056,12 +1483,12 @@
       cards: m,
       sales: values.length,
       beta: Math.exp(quantile(vals, 0.5)) - 1,
-      lo: Math.exp(quantile(boots, 0.05)) - 1,
-      hi: Math.exp(quantile(boots, 0.95)) - 1,
+      lo: Math.exp(quantile(boots, CONFIG.shiny.ciRange[0])) - 1,
+      hi: Math.exp(quantile(boots, CONFIG.shiny.ciRange[1])) - 1,
     };
   }
   function shinyPremiums() {
-    if (premiumCache && Date.now() - premiumCache.at < 60000) return premiumCache;
+    if (premiumCache && Date.now() - premiumCache.at < CONFIG.shiny.cacheMs) return premiumCache;
     const all = [];
     const byRarity = {};
     for (const [cardId, rarity, price, base] of Object.values(shinyPairs)) {
@@ -1083,7 +1510,7 @@
     if (p.all.beta !== null) return { ...p.all, scope: 'toutes raretés' };
     return null;
   }
-  const fmtPremium = (p) => `${p.beta >= 0 ? '+' : ''}${Math.round(p.beta * 100)} % (90 % de confiance : ${Math.round(p.lo * 100)} à ${Math.round(p.hi * 100)} %, ${p.cards} cartes${p.scope ? `, ${p.scope}` : ''})`;
+  const fmtPremium = (p) => `${p.beta >= 0 ? '+' : ''}${Math.round(p.beta * 100)} % (${Math.round((CONFIG.shiny.ciRange[1] - CONFIG.shiny.ciRange[0]) * 100)} % de confiance : ${Math.round(p.lo * 100)} à ${Math.round(p.hi * 100)} %, ${p.cards} cartes${p.scope ? `, ${p.scope}` : ''})`;
 
   // Valeur d'une carte (résumé) selon sa version : shiny → ses propres ventes
   // shiny (ownMinSales au moins), sinon valeur normale × (1 + prime), sinon
@@ -1143,7 +1570,7 @@
         pendingIds[key] = id;
       }
     }
-    if (Object.keys(pendingIds).length && !idsTimer) idsTimer = setTimeout(flushIds, 3000);
+    if (Object.keys(pendingIds).length && !idsTimer) idsTimer = setTimeout(flushIds, CONFIG.mem.flushIdsMs);
   }
   function flushIds() {
     clearTimeout(idsTimer);
@@ -1184,7 +1611,7 @@
       }
     }
     log('Carte introuvable, identifiant oublié :', id);
-    if (forgetPending && !idsTimer) idsTimer = setTimeout(flushIds, 3000);
+    if (forgetPending && !idsTimer) idsTimer = setTimeout(flushIds, CONFIG.mem.flushIdsMs);
   }
   const knownId = (title) => idsMem[simplify(title)] || null;
   const autoOpenAllowed = () => GM_getValue(KEY_AUTO_OPEN, CONFIG.autoOpenMarket);
@@ -1225,7 +1652,7 @@
       clearTimeout(backup);
       fn();
     };
-    const backup = setTimeout(once, ms + 60000); // si le worker cesse de répondre
+    const backup = setTimeout(once, ms + CONFIG.tech.timerBackupMs); // si le worker cesse de répondre
     timers.set(id, once);
     worker.postMessage({ id, ms: Math.max(0, Math.round(ms)) });
   }
@@ -1240,6 +1667,8 @@
   // requêtes /api/ du navigateur : celles des deux scripts et celles de la page
   // elle-même (vues par l'aide à la vente), dans tous les onglets, par un canal
   // commun (BroadcastChannel « wm-gate »).
+  // Toutes les valeurs ci-dessous sont les réglages par défaut (CONFIG.gate,
+  // modifiables dans « ⚙ Réglages », paramètre P de makeGate).
   // - Deux plafonds glissants : perTen requêtes en 10 s, perMin en 60 s.
   // - Lectures de fond (pastilles, plafonds) : 70 % des plafonds au plus ;
   //   nettoyage de la collection : 90 % ; le reste est gardé pour l'urgent
@@ -1257,16 +1686,22 @@
   //   à l'autre script, pause de 2 min (4, puis 8 min si les refus continuent
   //   dans le quart d'heure). Un 503 (site surchargé ou en maintenance) donne
   //   une pause (30 s, puis 1, 2… 5 min au plus), sans toucher aux plafonds.
-  function makeGate(storeKey) {
-    const START = { perTen: 8, perMin: 40 };
-    const TOP = { perTen: 25, perMin: 130 };
-    const FLOOR = { perTen: 2, perMin: 8 };
-    const UNLOCK_MS = 3600000;
+  function makeGate(storeKey, P) {
+    const START = { perTen: P.startShort, perMin: P.startLong };
+    const TOP = { perTen: P.topShort, perMin: P.topLong };
+    const FLOOR = { perTen: P.floorShort, perMin: P.floorLong };
+    const UNLOCK_MS = P.unlockMin * 60000;
+    // Fenêtres des deux plafonds (10 s et 60 s par défaut) ; les noms perTen et
+    // perMin (réglage gardé) restent ceux de ces valeurs par défaut.
+    const SHORT = P.shortWindowSec * 1000;
+    const LONG = P.longWindowSec * 1000;
+    const KEEP = Math.max(SHORT, LONG);
+    const per = (sec) => (sec === 60 ? 'min' : `${sec} s`);
     // Plafonds fixés par des refus vieux de plus d’1 h : la montée peut reprendre.
     const expired = (c) => !!c && !!c.locked && Date.now() - (c.lastRefusal || 0) > UNLOCK_MS;
     let cfg = { ...START, locked: false, refusals: 0, lastRefusal: 0, ...GM_getValue(storeKey, {}) };
     if (expired(cfg)) cfg = { ...cfg, locked: false };
-    const recent = []; // [heure, adresse, identifiant] des requêtes des 60 dernières secondes
+    const recent = []; // [heure, adresse, identifiant] des requêtes de la fenêtre la plus longue
     const seen = new Set();
     let pausedUntil = 0;
     let strikes = 0;
@@ -1276,13 +1711,13 @@
     let chan = null;
     const save = () => GM_setValue(storeKey, cfg);
     function prune(now) {
-      while (recent.length && recent[0][0] < now - 60000) seen.delete(recent.shift()[2]);
+      while (recent.length && recent[0][0] < now - KEEP) seen.delete(recent.shift()[2]);
     }
     // Une même requête peut être vue deux fois (par le script qui l'envoie et
     // par l'aide à la vente qui observe la page) : même adresse à 1,5 s près.
     function record(at, url, id, remote) {
       if (seen.has(id)) return;
-      if (url && recent.some((e) => e[1] === url && Math.abs(e[0] - at) < 1500)) return;
+      if (url && recent.some((e) => e[1] === url && Math.abs(e[0] - at) < P.sameRequestMs)) return;
       seen.add(id);
       recent.push([at, url || '', id]);
       if (recent.length > 1 && recent[recent.length - 2][0] > at) recent.sort((a, b) => a[0] - b[0]);
@@ -1295,8 +1730,8 @@
       return n;
     };
     const limits = (kind) => {
-      const share = kind === 'bulk' ? 0.7 : kind === 'clean' ? 0.9 : 1;
-      return [[10000, Math.max(1, Math.floor(cfg.perTen * share))], [60000, Math.max(1, Math.floor(cfg.perMin * share))]];
+      const share = kind === 'bulk' ? P.shareBulk : kind === 'clean' ? P.shareClean : 1;
+      return [[SHORT, Math.max(1, Math.floor(cfg.perTen * share))], [LONG, Math.max(1, Math.floor(cfg.perMin * share))]];
     };
     // Attente avant la prochaine requête permise (0 : tout de suite). « critical »
     // (lecture juste avant de miser) passe outre une pause, jamais les plafonds.
@@ -1305,7 +1740,7 @@
       prune(now);
       let wait = kind === 'critical' ? 0 : pausedUntil - now;
       for (const [ms, max] of limits(kind)) {
-        if (inWindow(now, ms) >= max) wait = Math.max(wait, recent[recent.length - max][0] + ms - now + 25);
+        if (inWindow(now, ms) >= max) wait = Math.max(wait, recent[recent.length - max][0] + ms - now + P.spacingMs);
       }
       if (wait > 0 && kind !== 'critical' && now >= pausedUntil) saturatedAt = now;
       return Math.max(0, wait);
@@ -1316,10 +1751,10 @@
         cfg = { ...cfg, locked: false };
         save();
       }
-      if (cfg.locked || now - climbAt < 30000 || now - saturatedAt > 15000) return;
+      if (cfg.locked || now - climbAt < P.climbEveryMs || now - saturatedAt > P.saturatedMs) return;
       climbAt = now;
-      const perTen = Math.min(TOP.perTen, cfg.perTen + 2);
-      const perMin = Math.min(TOP.perMin, cfg.perMin + 8);
+      const perTen = Math.min(TOP.perTen, cfg.perTen + P.climbShort);
+      const perMin = Math.min(TOP.perMin, cfg.perMin + P.climbLong);
       if (perTen === cfg.perTen && perMin === cfg.perMin) return;
       Object.assign(cfg, { perTen, perMin });
       save();
@@ -1348,27 +1783,27 @@
       const now = Date.now();
       if (now < pausedUntil) return; // même salve : déjà traitée
       prune(now);
-      strikes = now - lastStrikeAt < 2 * 60000 ? strikes + 1 : 1;
+      strikes = now - lastStrikeAt < P.strikeWindowMs ? strikes + 1 : 1;
       lastStrikeAt = now;
-      let pause = 10000;
+      let pause = P.pause1Ms;
       if (status === 503) {
-        pause = Math.min(300000, 30000 * 2 ** (strikes - 1));
+        pause = Math.min(P.pause503MaxMs, P.pause503Ms * 2 ** (strikes - 1));
       } else if (strikes === 2) {
-        cfg = { ...cfg, perTen: Math.max(FLOOR.perTen, Math.floor(cfg.perTen * 0.9)), perMin: Math.max(FLOOR.perMin, Math.floor(cfg.perMin * 0.9)) };
-        pause = 30000;
+        cfg = { ...cfg, perTen: Math.max(FLOOR.perTen, Math.floor(cfg.perTen * P.cut2)), perMin: Math.max(FLOOR.perMin, Math.floor(cfg.perMin * P.cut2)) };
+        pause = P.pause2Ms;
       } else if (strikes >= 3) {
         // On calme le jeu : 3 refus rapprochés.
-        calmStrikes = now - calmAt < 15 * 60000 ? calmStrikes + 1 : 1;
+        calmStrikes = now - calmAt < P.calmWindowMin * 60000 ? calmStrikes + 1 : 1;
         calmAt = now;
-        cfg = { ...cfg, perTen: Math.max(FLOOR.perTen, Math.floor(cfg.perTen * 0.8)), perMin: Math.max(FLOOR.perMin, Math.floor(cfg.perMin * 0.8)),
+        cfg = { ...cfg, perTen: Math.max(FLOOR.perTen, Math.floor(cfg.perTen * P.cut3)), perMin: Math.max(FLOOR.perMin, Math.floor(cfg.perMin * P.cut3)),
           locked: true, refusals: (cfg.refusals || 0) + 1, lastRefusal: now, lastStatus: status };
-        pause = Math.min(480000, 120000 * 2 ** (calmStrikes - 1));
+        pause = Math.min(P.pause3MaxMs, P.pause3Ms * 2 ** (calmStrikes - 1));
         strikes = 0;
       }
       pausedUntil = now + pause;
       save();
       if (chan) chan.postMessage({ t: 'refused', cfg, pausedUntil });
-      log(`Refus du site (${status}) : plafonds ${cfg.perTen} / 10 s et ${cfg.perMin} / min, pause jusqu’à ${new Date(pausedUntil).toLocaleTimeString('fr-FR')}`);
+      log(`Refus du site (${status}) : plafonds ${cfg.perTen} / ${per(P.shortWindowSec)} et ${cfg.perMin} / ${per(P.longWindowSec)}, pause jusqu’à ${new Date(pausedUntil).toLocaleTimeString('fr-FR')}`);
     }
     function reset() {
       cfg = { ...START, locked: false, refusals: 0, lastRefusal: 0 };
@@ -1381,7 +1816,7 @@
         const m = e.data || {};
         if (m.t === 'req') record(m.at, m.url, m.id, true);
         else if (m.t === 'refused') adopt(m.cfg, m.pausedUntil);
-        else if (m.t === 'hello') chan.postMessage({ t: 'state', list: recent.slice(-300), cfg, pausedUntil });
+        else if (m.t === 'hello') chan.postMessage({ t: 'state', list: recent.slice(-P.shareListMax), cfg, pausedUntil });
         else if (m.t === 'state') {
           for (const [at, url, id] of m.list || []) record(at, url, id, true);
           adopt(m.cfg, m.pausedUntil);
@@ -1397,9 +1832,9 @@
     const status = () => {
       const now = Date.now();
       prune(now);
-      return `plafonds ${cfg.perTen} / 10 s et ${cfg.perMin} / min (${cfg.locked
+      return `plafonds ${cfg.perTen} / ${per(P.shortWindowSec)} et ${cfg.perMin} / ${per(P.longWindowSec)} (${cfg.locked
         ? `fixés après ${cfg.refusals} refus, le dernier ${new Date(cfg.lastRefusal).toLocaleString('fr-FR')} ; nouvelle montée possible après ${new Date(cfg.lastRefusal + UNLOCK_MS).toLocaleString('fr-FR')}`
-        : `réglage en cours, jusqu’à ${TOP.perTen} et ${TOP.perMin}`}) · requêtes vues : ${inWindow(now, 10000)} en 10 s, ${inWindow(now, 60000)} en 60 s`
+        : `réglage en cours, jusqu’à ${TOP.perTen} et ${TOP.perMin}`}) · requêtes vues : ${inWindow(now, SHORT)} en ${P.shortWindowSec} s, ${inWindow(now, LONG)} en ${P.longWindowSec} s`
         + (now < pausedUntil ? ` · pause jusqu’à ${new Date(pausedUntil).toLocaleTimeString('fr-FR')}` : '');
     };
     return { take, delay, refused, reset, status, seen: (url, at = Date.now()) => record(at, url, newId(), false), pausedUntil: () => pausedUntil };
@@ -1409,12 +1844,12 @@
   const isRateRefusal = (status, url = '') => status === 429 || status === 503
     || (status === 403 && /\/api\/marketplace/.test(url) && !/\/bid\b/.test(url));
 
-  const gate = makeGate('wv.gate');
+  const gate = makeGate('wv.gate', CONFIG.gate);
   // Attend l'accord du portier, puis réserve la place de la requête.
   async function gateWait(kind, url) {
     for (;;) {
       if (gate.take(kind, url)) return;
-      await sleep(Math.min(5000, Math.max(50, gate.delay(kind))));
+      await sleep(Math.min(CONFIG.gate.waitMs[1], Math.max(CONFIG.gate.waitMs[0], gate.delay(kind))));
     }
   }
   earlyRequests.splice(0).forEach(([url, at]) => gate.seen(url, at));
@@ -1461,7 +1896,7 @@
       return null;
     };
     const remembered = [...(shiny ? titles.map((t) => knownId(`${t} ✦`)) : []), ...titles.map(knownId)].filter(Boolean);
-    const found = await tryIds([...new Set([...remembered, ...seenIds.slice(0, 4)])]);
+    const found = await tryIds([...new Set([...remembered, ...seenIds.slice(0, CONFIG.sheet.tryIds)])]);
     if (found || state.autoTried || view.onMarket || !autoOpenAllowed()) return found;
     if (Date.now() - state.openedAt < CONFIG.autoOpenDelayMs) return null;
     const marketTab = findButton(MARKET_TAB, view.container);
@@ -1471,11 +1906,11 @@
     log('Ouverture de l’onglet Marché pour repérer la carte (une seule fois pour cette carte)');
     const before = seenIds[0];
     marketTab.click();
-    for (let i = 0; i < 60 && seenIds[0] === before; i++) await sleep(100);
-    await sleep(150);
+    for (let i = 0; i < CONFIG.sheet.marketWaitMs / CONFIG.sheet.stepMs && seenIds[0] === before; i++) await sleep(CONFIG.sheet.stepMs);
+    await sleep(CONFIG.sheet.marketSettleMs);
     const detailsTab = findButton(DETAILS_TAB, view.container);
     if (detailsTab) detailsTab.click();
-    return tryIds(seenIds.slice(0, 4));
+    return tryIds(seenIds.slice(0, CONFIG.sheet.tryIds));
   }
 
   // ---------------------------------------------------------------------------
@@ -1512,14 +1947,14 @@
       const detailsTab = findButton(DETAILS_TAB, view.container);
       if (detailsTab) {
         detailsTab.click();
-        for (let i = 0; i < 20 && !findButton(SELL_TEXT, view.container); i++) await sleep(100);
+        for (let i = 0; i < CONFIG.sheet.tabWaitMs / CONFIG.sheet.stepMs && !findButton(SELL_TEXT, view.container); i++) await sleep(CONFIG.sheet.stepMs);
       }
     }
     const sell = findButton(SELL_TEXT, view.container);
     if (!sell) return null;
     sell.click();
-    for (let i = 0; i < 40; i++) {
-      await sleep(100);
+    for (let i = 0; i < CONFIG.sheet.formWaitMs / CONFIG.sheet.stepMs; i++) {
+      await sleep(CONFIG.sheet.stepMs);
       const now = cardView();
       if (now && now.formOpen) return now;
     }
@@ -1628,13 +2063,23 @@
     #wv-panel .wv-spin { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.2); border-top-color: #fbbf24;
       border-radius: 50%; animation: wv-spin .8s linear infinite; }
     @keyframes wv-spin { to { transform: rotate(360deg); } }
+    #wv-panel .wv-gear-row { justify-content: flex-end; }
+    #wv-panel button.wv-gear { border: 0; border-radius: 8px; min-height: 32px; padding: 0 12px; font: inherit; font-size: 12px;
+      background: rgba(255,255,255,.08); color: #e4e4e7; }
   `;
   document.head.appendChild(style);
   document.body.appendChild(panel);
+  // Bouton ⚙ en bas du détail du bandeau : fenêtre des réglages (le menu
+  // Tampermonkey est peu commode sur Android).
+  const gearRow = '<div class="wv-status wv-gear-row"><button type="button" class="wv-gear">⚙ Réglages</button></div>';
   // Réduit par défaut : une ligne avec l'essentiel.
   panel.classList.toggle('wv-min', GM_getValue(KEY_MINIMIZED, true));
   panel.classList.toggle('wv-top', GM_getValue(KEY_TOP, false));
   panel.addEventListener('click', (e) => {
+    if (e.target.closest('button.wv-gear')) {
+      settings.open();
+      return;
+    }
     // Télécommande pas encore réglée : le bandeau lui-même demande le sujet.
     if (e.target.closest('header') && panel.dataset.mode === 'remote-setup') {
       remoteSetup();
@@ -1667,7 +2112,7 @@
         btn.textContent = 'Rempli ✓';
         btn.title = report.join(', ');
       }
-      setTimeout(() => render(), 2500);
+      setTimeout(() => render(), CONFIG.ui.fillMsgMs);
     });
   });
 
@@ -1690,14 +2135,14 @@
   const KEY_MINE_READ = 'wv.mineReadAt';
   let mineReading = false;
   async function readMineList() {
-    if (mineReading || Date.now() - GM_getValue(KEY_MINE_READ, 0) < 6 * 3600000) return;
+    if (mineReading || Date.now() - GM_getValue(KEY_MINE_READ, 0) < CONFIG.read.mineEveryHours * 3600000) return;
     mineReading = true;
     GM_setValue(KEY_MINE_READ, Date.now());
     const url = '/api/marketplace?page=1&limit=50&sort=recent&mine=1';
     listUrls.set(`${location.origin}${url}`, Date.now()); // déjà lue : pas de relecture par l'aide à l'achat
     // Échec (refus, coupure, réponse illisible) : nouvel essai dans 30 min
     // (v1.4.0 ; avant, pas avant 6 h).
-    const retrySoon = () => GM_setValue(KEY_MINE_READ, Date.now() - 6 * 3600000 + 30 * 60000);
+    const retrySoon = () => GM_setValue(KEY_MINE_READ, Date.now() - CONFIG.read.mineEveryHours * 3600000 + CONFIG.read.mineRetryMin * 60000);
     try {
       await gateWait('bulk', `${location.origin}${url}`);
       const res = await pageFetch(url);
@@ -1766,7 +2211,7 @@
           body += `<div class="wv-tip">💤 Se vend peu : ${esc(thinText(state.sales7, state.span10))}.</div>`;
         }
       }
-      if (isHot(state.sales48)) body += `<div class="wv-tip">🔥 Se vend beaucoup : ${state.sales48} ventes en 48 h.</div>`;
+      if (isHot(state.sales48)) body += `<div class="wv-tip">🔥 Se vend beaucoup : ${state.sales48} ventes en ${CONFIG.stats.hotHours} h.</div>`;
       if (timing && timing.later) {
         body += `<div class="wv-tip">💡 Lancer ${fmtTime(timing.later.start)} avec ${fmtDuration(timing.later.minutes)} : fin ${hhmm(timing.later.end)}, environ +${fmtPrice(timing.later.gain)} wikibidous sur le prix « Normal »</div>`;
       }
@@ -1778,7 +2223,7 @@
       : !advice.enough ? '<i>trop peu de ventes</i>'
         : `${fmtPrice(advice.quick)}<i> rapide · </i>${fmtPrice(advice.normal)}<i> normal</i>`;
     panel.innerHTML = `<header><span class="wv-title">${title}</span>${pill}<span class="wv-sum">${summary}</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
-      + `<div class="wv-body">${body}${count ? `<div class="wv-status">${count.replace(/<[^>]+>/g, '')} récentes${advice && advice.period ? ` (${esc(advice.period)})` : ''}</div>` : ''}</div>`;
+      + `<div class="wv-body">${body}${count ? `<div class="wv-status">${count.replace(/<[^>]+>/g, '')} récentes${advice && advice.period ? ` (${esc(advice.period)})` : ''}</div>` : ''}${gearRow}</div>`;
   }
 
   // ---------------------------------------------------------------------------
@@ -1824,7 +2269,7 @@
         busy = false;
       }
       if (!state.card) {
-        const gaveUp = (state.autoTried || !autoOpenAllowed()) && Date.now() - state.openedAt > CONFIG.autoOpenDelayMs + 6000;
+        const gaveUp = (state.autoTried || !autoOpenAllowed()) && Date.now() - state.openedAt > CONFIG.autoOpenDelayMs + CONFIG.sheet.giveUpMs;
         state.status = state.error
           || (gaveUp ? 'Ventes introuvables pour cette carte : ouvre l’onglet « Marché » une fois (la carte sera ensuite retenue).' : 'Recherche des ventes…');
         render();
@@ -1832,7 +2277,7 @@
       }
       log('Carte reconnue :', state.card.data.wikipedia_title, state.rarity);
     }
-    if (!state.computedAt || formChanged || Date.now() - state.computedAt > 60000) {
+    if (!state.computedAt || formChanged || Date.now() - state.computedAt > CONFIG.sheet.recomputeMs) {
       const now = Date.now();
       const sales = state.card.data.sales || [];
       const adv = state.shiny ? shinyAdvice(sales, state.rarity) : adviceFor(sales, state.rarity);
@@ -1873,16 +2318,16 @@
   const schedule = () => {
     if (queued) return;
     queued = true;
-    timer(runTick, 60);
+    timer(runTick, CONFIG.ui.tickDelayMs);
   };
   new MutationObserver((mutations) => {
     if (mutations.some((m) => !panel.contains(m.target) && !badgeLayer.contains(m.target))) schedule();
   }).observe(document.body, { childList: true, subtree: true });
   const beat = () => {
     schedule();
-    timer(beat, 700);
+    timer(beat, CONFIG.ui.beatMs);
   };
-  setTimeout(beat, 700);
+  setTimeout(beat, CONFIG.ui.beatMs);
 
   // ---------------------------------------------------------------------------
   // Aide à l'achat : une pastille sur chaque enchère de /marketplace
@@ -2067,7 +2512,7 @@
   // qu'on achète maintenant. Une demi-étoile par starStep wikibidous, starMax
   // au plus ; couleur du rouge franc (0 étoile) au vert franc (starMax).
   const starsOf = (gain) => Math.min(CONFIG.buy.starMax, Math.floor(Math.max(0, gain) / CONFIG.buy.starStep) / 2);
-  const starColor = (stars) => `hsl(${Math.round((stars / CONFIG.buy.starMax) * 120)}, 85%, 50%)`;
+  const starColor = (stars) => `hsl(${Math.round(CONFIG.colors.hueLow + (stars / CONFIG.buy.starMax) * (CONFIG.colors.hueHigh - CONFIG.colors.hueLow))}, ${CONFIG.colors.starSaturation}%, ${CONFIG.colors.starLightness}%)`;
   // starMax étoiles, remplies selon la note (demi-étoiles comprises).
   const starsHtml = (stars) => `<span class="wv-stars" style="--wv-p:${((stars / CONFIG.buy.starMax) * 100).toFixed(1)}%">${'★'.repeat(CONFIG.buy.starMax)}</span>`;
   const fmtStars = (stars) => `${String(stars).replace('.', ',')} étoile${stars > 1 ? 's' : ''}`;
@@ -2104,7 +2549,7 @@
         + (info.shiny ? `${shinyNote(sum.shinyVia, sum.premium, sum.n)}\n` : '')
         + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, revente (${ref.name}) ${fmtPrice(ref.price)} → ${fmtGain(gain)} wikibidous : ${fmtStars(stars)}\n`
         + `Vente rapide ${sum.quick != null ? fmtPrice(sum.quick) : '—'} · normale ${sum.normal != null ? fmtPrice(sum.normal) : '—'} · médiane ${fmtPrice(sum.median)}\n${caps}\n`
-        + (isHot(sum.sales48) ? `🔥 Se vend beaucoup : ${sum.sales48} ventes en 48 h\n` : '')
+        + (isHot(sum.sales48) ? `🔥 Se vend beaucoup : ${sum.sales48} ventes en ${CONFIG.stats.hotHours} h\n` : '')
         + (collection
           ? `📚 Carte de collection : plafond = médiane. Clic : retirer de la collection.`
           : `Clic : marquer comme carte de collection (plafond = médiane).`)
@@ -2124,11 +2569,11 @@
         continue;
       }
       const r = b.target.getBoundingClientRect();
-      const out = r.width < 2 || r.bottom < 0 || r.top > innerHeight;
+      const out = r.width < CONFIG.detect.minPx || r.bottom < 0 || r.top > innerHeight;
       b.el.style.display = out ? 'none' : '';
       if (out) continue;
       b.el.style.left = `${Math.round(r.left + r.width / 2)}px`;
-      b.el.style.top = `${Math.round(r.top + 6)}px`;
+      b.el.style.top = `${Math.round(r.top + CONFIG.ui.badgeTopPx)}px`;
     }
   }
   let placeQueued = false;
@@ -2160,13 +2605,13 @@
     for (const el of document.querySelectorAll('[id^="marketplace-auction-"]')) {
       const target = el.querySelector('.card-frame') || el;
       const r = target.getBoundingClientRect();
-      if (r.width < 2) continue;
+      if (r.width < CONFIG.detect.minPx) continue;
       const info = listingInfo(el, ids);
       const sum = info.cardId ? valueFor(info.cardId, info.rarity, info.shiny) : null;
       // Toutes les cartes de la page sont lues : les inconnues à l'écran, les
       // autres inconnues, puis les résumés anciens (ou d'avant la v0.12, sans
       // prix « Vente rapide ») à rafraîchir.
-      if (info.cardId && !sum) (r.bottom > -100 && r.top < innerHeight + 100 ? visible : later).push(info.cardId);
+      if (info.cardId && !sum) (r.bottom > -CONFIG.ui.nearScreenPx && r.top < innerHeight + CONFIG.ui.nearScreenPx ? visible : later).push(info.cardId);
       else if (sum && (sum.stale || ((sum.quick == null || sum.sales48 === undefined) && sum.median !== null))) refresh.push(info.cardId);
       seen.add(info.id);
       const content = badgeContent(info, sum);
@@ -2178,8 +2623,8 @@
       }
       b.target = target;
       b.el.className = 'wv-b';
-      b.el.style.setProperty('--wv-c', content.bg || '#a1a1aa');
-      b.el.style.opacity = sum && sum.stale ? '.7' : '';
+      b.el.style.setProperty('--wv-c', content.bg || CONFIG.colors.unknown);
+      b.el.style.opacity = sum && sum.stale ? String(CONFIG.colors.staleOpacity) : '';
       const markup = content.html || esc(content.text);
       if (b.el.__wvHtml !== markup) {
         b.el.innerHTML = markup;
@@ -2205,8 +2650,8 @@
     const now = Date.now() / 1000;
     const ids = new Set();
     for (const e of Object.values(shinyAuctions)) {
-      if (!e[3] && e[2] && now > e[2] + 180 && now < e[2] + 3 * 86400) ids.add(e[0]);
-      if (ids.size >= 5) break;
+      if (!e[3] && e[2] && now > e[2] + CONFIG.shiny.followAfterSec && now < e[2] + CONFIG.shiny.followDays * 86400) ids.add(e[0]);
+      if (ids.size >= CONFIG.shiny.followMax) break;
     }
     return [...ids];
   }
@@ -2216,7 +2661,7 @@
     const now = Date.now() / 1000;
     let changed = false;
     for (const e of Object.values(shinyAuctions)) {
-      if (e[0] === cardId && !e[3] && e[2] && now > e[2] + 180) {
+      if (e[0] === cardId && !e[3] && e[2] && now > e[2] + CONFIG.shiny.followAfterSec) {
         e[3] = Math.round(now);
         changed = true;
       }
@@ -2231,12 +2676,13 @@
   // v0.21.0 : violet si à défausser (sans valeur et rareté sous UR : C, PC,
   // R, SR), sinon du rouge (worthlessBelow et moins) au vert franc (valueGreen
   // et au-delà). rarity = null : jamais violet (carte shiny, rareté inconnue).
-  const DISCARD_COLOR = 'hsl(275, 70%, 58%)';
+  const DISCARD_COLOR = CONFIG.colors.discard;
   const discardRarity = (rarity) => RARITIES.indexOf(rarity) >= 0 && RARITIES.indexOf(rarity) < RARITIES.indexOf('UR');
   function valueColor(price, thin = false, rarity = null) {
     if (worthless(price, thin) && discardRarity(rarity)) return DISCARD_COLOR;
     const t = price == null ? 0 : Math.min(1, Math.max(0, (price - CONFIG.worthlessBelow) / (CONFIG.valueGreen - CONFIG.worthlessBelow)));
-    return `hsl(${Math.round(t * 120)}, 75%, ${Math.round(50 - Math.sin(t * Math.PI) * 6)}%)`;
+    const C = CONFIG.colors;
+    return `hsl(${Math.round(C.hueLow + t * (C.hueHigh - C.hueLow))}, ${C.valueSaturation}%, ${Math.round(C.valueLightness - Math.sin(t * Math.PI) * C.valueDip)}%)`;
   }
 
   // Cartes de la grille (relevé réel) : div.rounded-2xl.overflow-hidden, classe
@@ -2286,14 +2732,14 @@
     const refresh = [];
     for (const { face, title, rarity, shiny } of gridCards()) {
       const r = face.getBoundingClientRect();
-      if (r.width < 2) continue;
+      if (r.width < CONFIG.detect.minPx) continue;
       // Profil : seulement les vraies cartes (rareté lisible), pas les
       // autres encadrés de la page.
       if (profile && !rarity) continue;
       seen.add(face);
       const cardId = gridCardId(title, shiny, ids);
       const sum = cardId ? valueFor(cardId, rarity, shiny, CONFIG.collectionSummaryHours) : null;
-      if (cardId && !sum) (r.bottom > -100 && r.top < innerHeight + 100 ? visible : later).push(cardId);
+      if (cardId && !sum) (r.bottom > -CONFIG.ui.nearScreenPx && r.top < innerHeight + CONFIG.ui.nearScreenPx ? visible : later).push(cardId);
       // Résumé ancien, ou d'avant la v0.14 (sans l'écart des 10 dernières ventes) : relu.
       else if (sum && (sum.stale || ((sum.span10 === undefined || sum.sales48 === undefined) && sum.median !== null))) refresh.push(cardId);
       let text;
@@ -2316,13 +2762,13 @@
         bg = valueColor(quick, thin, shiny ? null : rarity);
         tip = `${head} : vente rapide estimée à ${fmtPrice(quick)} wikibidous · normale ${fmtPrice(sum.normal)}`
           + `${sum.median != null ? ` · médiane ${fmtPrice(sum.median)}` : ''} (${thinText(sum.sales7, sum.span10)})`
-          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en 48 h).` : '.');
+          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.');
       } else {
         const thin = isThin(sum.sales7, sum.span10);
         text = `${thin ? '💤 ' : isHot(sum.sales48) ? '🔥 ' : ''}${fmtPrice(sum.normal)}`;
         bg = valueColor(sum.normal, thin, shiny ? null : rarity);
         tip = `${head} : vente « Normal » estimée à ${fmtPrice(sum.normal)} wikibidous (${thinText(sum.sales7, sum.span10)})`
-          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en 48 h).` : '.')
+          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.')
           + (worthless(sum.normal, thin) && discardRarity(rarity) ? ' → sans valeur, à défausser.' : '');
       }
       let b = cardBadges.get(face);
@@ -2338,10 +2784,10 @@
       if (shiny && sum && cardId) {
         text = `✦ ${text}`;
         tip = `${tip}\n${shinyNote(sum.shinyVia, sum.premium, sum.n)}`.replace(' → à défausser.', '.');
-        if (sum.shinyVia === 'inconnue') bg = '#94a3b8';
+        if (sum.shinyVia === 'inconnue') bg = CONFIG.colors.shinyUnknown;
       }
-      b.el.style.setProperty('--wv-c', bg || '#a1a1aa');
-      b.el.style.opacity = sum && sum.stale ? '.7' : '';
+      b.el.style.setProperty('--wv-c', bg || CONFIG.colors.unknown);
+      b.el.style.opacity = sum && sum.stale ? String(CONFIG.colors.staleOpacity) : '';
       if (b.el.textContent !== text) b.el.textContent = text;
       b.el.title = tip;
     }
@@ -2377,7 +2823,7 @@
   function pumpSales(queue) {
     lastQueue = queue;
     const now = Date.now();
-    const retryIn = (id) => Math.min(60000, 5000 * 2 ** ((failCount.get(id) || 1) - 1));
+    const retryIn = (id) => Math.min(CONFIG.read.failRetryMaxMs, CONFIG.read.failRetryMs * 2 ** ((failCount.get(id) || 1) - 1));
     for (const next of queue) {
       if (inFlight.size >= CONFIG.buy.parallel) break;
       if (inFlight.has(next) || deadIds.has(next) || now - (failedAt.get(next) || 0) < retryIn(next)) continue;
@@ -2388,14 +2834,14 @@
         pumpLater(wait + 5);
         break;
       }
-      nextStartAt = Date.now() + between(40, 160);
+      nextStartAt = Date.now() + between(...CONFIG.read.spacingMs);
       inFlight.add(next);
       readStats.inflightMax = Math.max(readStats.inflightMax, inFlight.size);
       fetchSales(next, CONFIG.buy.cacheMinutes * 60000, 'bulk')
         .then((data) => {
           failCount.delete(next);
           const e = summaries[next];
-          if (!e || Date.now() - e.at > 60000 || !e.t) summarize(next, data.sales || [], data.wikipedia_title);
+          if (!e || Date.now() - e.at > CONFIG.read.resummarizeMs || !e.t) summarize(next, data.sales || [], data.wikipedia_title);
         })
         .catch((err) => {
           log('Ventes illisibles', next, err.message);
@@ -2405,7 +2851,7 @@
             // Carte introuvable (404) trois fois de suite : identifiant sans
             // doute mal associé à ce titre. Plus relue pendant cette session, et
             // l'association est oubliée (v1.4.0).
-            if (err.status === 404 && failCount.get(next) >= 3) forgetId(next);
+            if (err.status === 404 && failCount.get(next) >= CONFIG.read.forget404) forgetId(next);
           }
         })
         .finally(() => {
@@ -2451,7 +2897,7 @@
       .map((h) => norm(h.textContent)).find((t) => t && !/^(march[ée]|ench[èe]res?)$/i.test(t)) || null;
     let rarity = null;
     for (const el of root.querySelectorAll('span, div')) {
-      if (el.children.length || el.textContent.length > 14 || panel.contains(el)) continue;
+      if (el.children.length || el.textContent.length > CONFIG.detect.rarityTextMax || panel.contains(el)) continue;
       const code = rarityCode(el.textContent);
       if (code && isVisible(el)) {
         rarity = code;
@@ -2464,7 +2910,7 @@
   // Montant proposé par le site à côté du bouton « Miser » : la mise minimale.
   function pageMinBid() {
     const btn = [...document.querySelectorAll('button')].find((b) => /^miser$/i.test(norm(b.textContent)) && isVisible(b));
-    for (let n = btn && btn.parentElement, d = 0; n && d < 4; n = n.parentElement, d++) {
+    for (let n = btn && btn.parentElement, d = 0; n && d < CONFIG.detect.inputDepth; n = n.parentElement, d++) {
       const input = [...n.querySelectorAll('input')].find((i) => isVisible(i) && i.value);
       if (input) return Number(String(input.value).replace(/\D/g, '')) || null;
     }
@@ -2506,7 +2952,7 @@
     buyBusy = true;
     try {
       // Enchère : l'API (relue toutes les 20 s), sinon la liste déjà lue, sinon la page.
-      if (buy.apiOk !== false && Date.now() - buy.readAt > 20000) {
+      if (buy.apiOk !== false && Date.now() - buy.readAt > CONFIG.buy.auctionReadMs) {
         buy.readAt = Date.now();
         try {
           buy.auction = await readAuction(id);
@@ -2521,7 +2967,7 @@
         // par les ventes que la page a elle-même chargées.
         const page = auctionFromPage();
         let cardId = (page.title && knownId(page.title)) || null;
-        for (const seen of seenIds.slice(0, 3)) {
+        for (const seen of seenIds.slice(0, CONFIG.buy.pageSeenIds)) {
           if (cardId || !page.title) break;
           const data = await fetchSales(seen, CONFIG.buy.cacheMinutes * 60000).catch(() => null);
           if (data && simplify(data.wikipedia_title) === simplify(page.title)) cardId = seen;
@@ -2600,7 +3046,7 @@
     // Ligne réduite : écart de la prochaine mise et verdict (✅ 👍 ⛔…).
     const summary = !adv ? '<i>…</i>' : !adv.enough ? '<i>trop peu de ventes</i>' : buy.summary || '';
     const html = `<header><span class="wv-title">${title}</span>${pill}<span class="wv-sum">${summary}</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
-      + `<div class="wv-body">${body}${count ? `<div class="wv-status">${count.replace(/<[^>]+>/g, '')} récentes</div>` : ''}</div>`;
+      + `<div class="wv-body">${body}${count ? `<div class="wv-status">${count.replace(/<[^>]+>/g, '')} récentes</div>` : ''}${gearRow}</div>`;
     panel.style.display = 'block';
     if (html !== lastBuyHtml || panel.dataset.mode !== 'buy') panel.innerHTML = html;
     panel.dataset.mode = 'buy';
@@ -2630,9 +3076,9 @@
   const KEY_R_ME = 'wr.account';
   const idOf = (x) => (x ? String(x).toLowerCase() : null);
   // Plafond « Manuel… » : même règle que la surenchère de la tablette, un nombre
-  // entier de wikibidous entre 1 et R_MAX_MANUAL. Toute autre valeur, saisie
-  // ou reçue par ntfy, est refusée.
-  const R_MAX_MANUAL = 10000;
+  // entier de wikibidous entre 1 et R_MAX_MANUAL (réglage). Toute autre valeur,
+  // saisie ou reçue par ntfy, est refusée.
+  const R_MAX_MANUAL = CONFIG.remote.maxManualCap;
   const R_UUID = new RegExp(`^${UUID}$`, 'i');
   const rValidManual = (v) => Number.isInteger(v) && v >= 1 && v <= R_MAX_MANUAL;
   const rValidMode = (m) => m === 'resale' || m === 'collection' || m === 'off' || m === 'keep' || rValidManual(m);
@@ -2684,7 +3130,7 @@
       end: Date.parse(a.end_at),
     }));
     remote.readAt = Date.now();
-    remote.nextRead = Date.now() + between(120000, 300000);
+    remote.nextRead = Date.now() + between(...CONFIG.remote.readMs);
   }
 
   function rSetMode(id, mode, at) {
@@ -2716,7 +3162,7 @@
           url,
           data,
           headers: data ? { 'Content-Type': 'application/json' } : {},
-          timeout: 15000,
+          timeout: CONFIG.remote.ntfyTimeoutMs,
           onload: (res) => resolve(res.status >= 200 && res.status < 300 ? res.responseText : null),
           onerror: () => resolve(null),
           ontimeout: () => resolve(null),
@@ -2728,11 +3174,11 @@
   }
   // Priorité 1 : message de service, jamais affiché ni sonné sur le téléphone.
   const rPublish = (id, mode) => rSyncTopic() && ntfyRequest('POST', 'https://ntfy.sh/',
-    JSON.stringify({ topic: rSyncTopic(), message: JSON.stringify({ t: 'mode', id, mode, at: Date.now() }), priority: 1 }));
+    JSON.stringify({ topic: rSyncTopic(), message: JSON.stringify({ t: 'mode', id, mode, at: Date.now() }), priority: CONFIG.remote.modePriority }));
   async function rPullModes() {
     if (!rSyncTopic() || remote.syncing || Date.now() < remote.nextSync) return;
     remote.syncing = true;
-    remote.nextSync = Date.now() + between(20000, 40000);
+    remote.nextSync = Date.now() + between(...CONFIG.remote.pullMs);
     try {
       const since = GM_getValue(KEY_R_SINCE, '12h');
       const text = await ntfyRequest('GET', `https://ntfy.sh/${rSyncTopic()}/json?poll=1&since=${encodeURIComponent(since)}`);
@@ -2752,7 +3198,7 @@
           // Contrôle (v1.4.0) : enchère au format attendu, choix valide, date
           // plausible (une date dans le futur bloquerait les choix suivants).
           if (typeof msg.id === 'string' && R_UUID.test(msg.id) && rValidMode(msg.mode)
-            && Number.isFinite(msg.at) && msg.at <= Date.now() + 5 * 60000 && msg.at >= Date.now() - 13 * 3600000) {
+            && Number.isFinite(msg.at) && msg.at <= Date.now() + CONFIG.remote.futureMin * 60000 && msg.at >= Date.now() - CONFIG.remote.pastHours * 3600000) {
             rSetMode(msg.id.toLowerCase(), msg.mode, msg.at);
           }
         } catch (err) {
@@ -2795,7 +3241,7 @@
     // Relecture de « Mes enchères » (la page l'a lue au chargement).
     if (!remote.reading && Date.now() >= remote.nextRead) {
       remote.reading = true;
-      remote.nextRead = Date.now() + between(120000, 300000);
+      remote.nextRead = Date.now() + between(...CONFIG.remote.readMs);
       const url = `${location.origin}/api/marketplace?page=1&limit=50&sort=recent&mine=1`;
       try {
         await gateWait('urgent', url);
@@ -2820,14 +3266,14 @@
     for (const a of remote.followed) {
       const key = capsKey(a);
       const known = remote.caps.get(key);
-      if ((known && Date.now() - known.at < 600000) || remote.capsBusy.has(key)) continue;
+      if ((known && Date.now() - known.at < CONFIG.remote.capsMaxAgeMs) || remote.capsBusy.has(key)) continue;
       remote.capsBusy.add(key);
       fetchSales(a.cardId, CONFIG.buy.cacheMinutes * 60000, 'bulk').then((data) => {
         const own = a.shiny ? adviceFor(data.sales || [], a.rarity, true).buy : null;
         const useOwn = !!own && own.enough && own.n >= CONFIG.shiny.ownMinSales;
         const b = useOwn ? own : adviceFor(data.sales || [], a.rarity, false).buy;
         // 3 à 7 ventes : revente prudente, 80 % de la vente la plus basse, comme la tablette (v1.6.3).
-        const thin = b.enough && b.resaleCap == null && b.min != null ? Math.min(Math.floor(b.min / (1 + CONFIG.buy.resaleMargin)), b.quick - 1) : null;
+        const thin = b.enough && b.resaleCap == null && b.min != null ? Math.min(Math.floor(b.min / (1 + CONFIG.buy.resaleMargin)), b.quick - CONFIG.stats.capQuickGap) : null;
         remote.caps.set(key, { at: Date.now(), n: b.n || 0, resale: b.enough ? (b.resaleCap ?? thin) : null, thin: thin != null,
           collection: b.enough ? Math.floor(b.median) : null, median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn });
       }).catch(() => {}).finally(() => remote.capsBusy.delete(key));
@@ -2859,7 +3305,7 @@
       const { mode, cap } = rCapOf(a);
       return mode !== 'off' && cap != null && nextOf(a) > cap;
     };
-    const list = remote.followed.filter((a) => a.end > Date.now() - 60000)
+    const list = remote.followed.filter((a) => a.end > Date.now() - CONFIG.remote.keepEndedMs)
       .sort((a, b) => (overCap(a) - overCap(b)) || (a.end - b.end));
     const rows = list.map((a) => {
       const { mode, cap, c, invalid } = rCapOf(a);
@@ -2883,9 +3329,9 @@
     const html = `<header><span class="wv-title">Mes enchères</span><span class="wv-sum">${summary}</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
       + `<div class="wv-body">${rows || '<div class="wv-status">Aucune enchère en cours où tu as misé.</div>'}`
       + `${remote.status ? `<div class="wv-status">${esc(remote.status)}</div>` : ''}`
-      + `<div class="wv-status">Télécommande : les choix partent vers la tablette (prise en compte en moins d’une minute). Synchro : ${esc(remote.syncStatus)}.</div></div>`;
+      + `<div class="wv-status">Télécommande : les choix partent vers la tablette (prise en compte en moins d’une minute). Synchro : ${esc(remote.syncStatus)}.</div>${gearRow}</div>`;
     panel.style.display = 'block';
-    if ((html !== remote.lastHtml || panel.dataset.mode !== 'remote') && Date.now() - remote.touchedAt > 1500) {
+    if ((html !== remote.lastHtml || panel.dataset.mode !== 'remote') && Date.now() - remote.touchedAt > CONFIG.remote.touchPauseMs) {
       const body = panel.querySelector('.wv-body');
       const scroll = body ? body.scrollTop : 0;
       panel.innerHTML = html;
@@ -2907,6 +3353,350 @@
     remoteSetup();
     alert(rTopic() ? `Télécommande activée (sujet ${rTopic()}). Elle s’affiche sur la page du marché.` : 'Télécommande désactivée.');
   });
+
+  // ---------------------------------------------------------------------------
+  // Réglages modifiables : fenêtre « ⚙ Réglages » (même code dans les quatre scripts)
+  // ---------------------------------------------------------------------------
+  // Chaque valeur de CONFIG (délais, seuils, plafonds, pourcentages, poids des
+  // calculs, nombres de requêtes…) se change sans toucher au code : menu
+  // Tampermonkey → « ⚙ Réglages » (et, sur le téléphone, bouton ⚙ du bandeau).
+  // Seuls les écarts aux valeurs par défaut sont gardés, dans la mémoire de
+  // Tampermonkey (clé storeKey) : ils restent après une mise à jour du script,
+  // et une valeur que vous n'avez pas changée suit les nouvelles versions. Une
+  // valeur gardée qui ne convient plus (réglage disparu, type différent,
+  // négative, liste de mauvaise longueur) est ignorée, et signalée dans le
+  // diagnostic : la valeur par défaut s'applique.
+  // help : [[groupe, { chemin: libellé }], …] ; « clean.batchMax » désigne
+  // CONFIG.clean.batchMax. Fin du libellé : [liste] = liste de longueur libre,
+  // [±] = négatif permis, [0-1] = entre 0 et 1, [>0] = strictement positif.
+  // Libellé null : valeur réglée par une commande du menu, hors de la fenêtre.
+  function makeSettings(config, help, storeKey, title) {
+    const copy = (v) => JSON.parse(JSON.stringify(v));
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const defaults = copy(config);
+    const get = (obj, path) => path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+    const put = (obj, path, v) => {
+      const keys = path.split('.');
+      const last = keys.pop();
+      keys.reduce((o, k) => o[k], obj)[last] = v;
+    };
+    const paths = [];
+    (function walk(obj, prefix) {
+      for (const [k, v] of Object.entries(obj)) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) walk(v, `${prefix}${k}.`);
+        else paths.push(prefix + k);
+      }
+    })(defaults, '');
+    const info = new Map();
+    for (const [group, items] of help) {
+      for (const [path, label] of Object.entries(items)) {
+        if (label === null) {
+          info.set(path, null);
+          continue;
+        }
+        const flags = /((?:\s*\[(?:liste|±|0-1|>0)\])*)\s*$/.exec(label)[1];
+        info.set(path, {
+          group,
+          label: label.slice(0, label.length - flags.length).trim(),
+          list: flags.includes('[liste]'),
+          signed: flags.includes('[±]'),
+          unit: flags.includes('[0-1]'),
+          positive: flags.includes('[>0]'),
+        });
+      }
+    }
+    // Pourquoi une valeur ne convient pas ('' si elle convient).
+    function problem(path, v) {
+      const i = info.get(path);
+      if (!i || !paths.includes(path)) return 'réglage inconnu';
+      const d = get(defaults, path);
+      const signed = i.signed || (Array.isArray(d) && d.some((x) => typeof x === 'number' && x < 0));
+      const one = (dv, x) => {
+        if (typeof dv === 'number') {
+          if (typeof x !== 'number' || !Number.isFinite(x)) return 'nombre attendu';
+          if (i.unit && (x < 0 || x > 1)) return 'valeur entre 0 et 1 attendue';
+          if (i.positive && x <= 0) return 'valeur strictement positive attendue';
+          if (!signed && dv >= 0 && x < 0) return 'valeur positive ou nulle attendue';
+          return '';
+        }
+        if (typeof dv === 'boolean') return typeof x === 'boolean' ? '' : 'oui ou non attendu';
+        if (typeof dv === 'string') return typeof x === 'string' ? '' : 'texte attendu';
+        return 'valeur non modifiable';
+      };
+      if (!Array.isArray(d)) return one(d, v);
+      if (!Array.isArray(v)) return 'liste attendue';
+      if (i.list ? !v.length : v.length !== d.length) return i.list ? 'liste vide' : `${d.length} valeurs attendues (séparées par « ; »)`;
+      for (let k = 0; k < v.length; k++) {
+        const e = one(i.list ? d[0] : d[k], v[k]);
+        if (e) return `${k ? `${k + 1}e` : '1re'} valeur : ${e}`;
+      }
+      if (!i.list && d.length === 2 && typeof d[0] === 'number' && d[0] <= d[1] && v[0] > v[1]) return 'le minimum (1re valeur) dépasse le maximum (2e)';
+      return '';
+    }
+    // Valeurs gardées : appliquées à CONFIG dès le chargement du script.
+    const saved = GM_getValue(storeKey, {});
+    const applied = {};
+    const ignored = [];
+    for (const [path, v] of Object.entries(saved && typeof saved === 'object' ? saved : {})) {
+      const why = problem(path, v);
+      if (why) {
+        ignored.push(`${path} (${why})`);
+        continue;
+      }
+      applied[path] = v;
+      put(config, path, copy(v));
+    }
+    // Affichage et saisie : virgule décimale, listes séparées par « ; ».
+    const show = (v) => (Array.isArray(v) ? v.map(show).join(' ; ') : typeof v === 'number' ? String(v).replace('.', ',') : String(v));
+    const toNumber = (s) => {
+      const t = s.replace(/\s/g, '').replace(',', '.');
+      return /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(t) ? Number(t) : NaN;
+    };
+    function read(path, text) {
+      const d = get(defaults, path);
+      if (typeof d === 'number') return toNumber(text);
+      if (typeof d === 'string') return text.trim();
+      return text.split(';').map((s) => s.trim()).filter((s) => s !== '').map((s) => (typeof d[0] === 'number' ? toNumber(s) : s));
+    }
+    const summary = () => {
+      const list = Object.entries(applied).map(([p, v]) => `${p} = ${show(v)} (défaut ${show(get(defaults, p))})`);
+      return (list.length ? list.join(' · ') : 'aucun (valeurs par défaut)') + (ignored.length ? ` · ignorés : ${ignored.join(', ')}` : '');
+    };
+
+    const hostId = `${storeKey.replace(/\W/g, '-')}-panel`;
+    const isOpen = () => !!document.getElementById(hostId);
+    function open() {
+      if (isOpen()) return;
+      const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const plain = (s) => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const row = (p) => {
+        const i = info.get(p);
+        const d = get(defaults, p);
+        const cur = p in applied ? applied[p] : d;
+        const input = typeof d === 'boolean'
+          ? `<input type="checkbox"${cur ? ' checked' : ''}>`
+          : `<input type="text"${typeof d === 'number' ? ' inputmode="decimal"' : ''} value="${esc(show(cur))}" spellcheck="false" autocomplete="off">`;
+        const notes = [
+          `défaut : ${typeof d === 'boolean' ? (d ? 'oui' : 'non') : show(d) === '' ? '(vide)' : show(d)}`,
+          Array.isArray(d) ? (i.list ? 'liste, valeurs séparées par « ; »' : `${d.length} valeurs séparées par « ; »`) : '',
+          i.unit ? 'entre 0 et 1' : i.positive ? 'plus de 0' : i.signed ? 'négatif permis' : '',
+        ].filter(Boolean).join(' · ');
+        return `<div class="row" data-path="${esc(p)}"><div class="lbl">${esc(i.label)} <code>${esc(p)}</code></div>`
+          + `<div class="ctl">${input}<button type="button" class="rst" title="Valeur par défaut">↺</button></div>`
+          + `<div class="def">${esc(notes)}</div><div class="err"></div></div>`;
+      };
+      const groups = help.map(([group, items]) => {
+        const rows = Object.keys(items).filter((p) => info.get(p) && paths.includes(p));
+        return rows.length ? `<details><summary>${esc(group)}<span class="n"></span></summary>${rows.map(row).join('')}</details>` : '';
+      }).join('');
+      const host = document.createElement('div');
+      host.id = hostId;
+      host.style.cssText = 'all: initial; position: fixed; inset: 0; z-index: 2147483647;';
+      // Touches gardées pour la fenêtre (le site ne les reçoit pas).
+      for (const type of ['keydown', 'keyup', 'keypress']) host.addEventListener(type, (e) => e.stopPropagation());
+      const root = host.attachShadow({ mode: 'open' });
+      root.innerHTML = `<style>
+        :host { all: initial; }
+        .back { position: fixed; inset: 0; background: rgba(0,0,0,.55); }
+        .box { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 16px));
+          height: min(90vh, 900px); display: flex; flex-direction: column; box-sizing: border-box;
+          font: 13px/1.4 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; color: #f4f4f5; background: #18181b;
+          border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 16px 50px rgba(0,0,0,.6); overflow: hidden; }
+        header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-weight: 700; font-size: 15px;
+          border-bottom: 1px solid rgba(255,255,255,.1); }
+        header b { flex: 1; }
+        .tools { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 8px 14px 4px; }
+        .tools .q { flex: 1 1 220px; }
+        .tools label { display: flex; gap: 6px; align-items: center; color: #d4d4d8; }
+        .note { padding: 2px 14px 8px; color: #a1a1aa; font-size: 12px; border-bottom: 1px solid rgba(255,255,255,.08); }
+        .list { flex: 1; overflow: auto; padding: 6px 10px 10px; -webkit-overflow-scrolling: touch; }
+        details { border-radius: 10px; background: rgba(255,255,255,.03); margin: 6px 0; }
+        summary { cursor: pointer; padding: 9px 10px; font-weight: 700; user-select: none; }
+        summary .n { font-weight: 500; color: #fbbf24; }
+        .row { display: grid; grid-template-columns: 1fr minmax(150px, 220px); gap: 2px 10px; padding: 7px 10px;
+          border-top: 1px solid rgba(255,255,255,.06); }
+        .row[hidden], details[hidden] { display: none; }
+        .lbl { grid-column: 1; }
+        .lbl code { font: 11px ui-monospace, Menlo, Consolas, monospace; color: #71717a; word-break: break-all; }
+        .ctl { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 4px; align-items: center; justify-content: flex-end; }
+        .def { grid-column: 1; color: #a1a1aa; font-size: 11.5px; }
+        .err { grid-column: 1 / -1; color: #f87171; font-size: 12px; }
+        .err:empty { display: none; }
+        .row.mod { background: rgba(251,191,36,.08); box-shadow: inset 3px 0 #fbbf24; }
+        .row.bad { background: rgba(248,113,113,.1); box-shadow: inset 3px 0 #f87171; }
+        input[type=text], input[type=search] { box-sizing: border-box; width: 100%; min-width: 0; padding: 6px 8px; border-radius: 8px;
+          border: 1px solid rgba(255,255,255,.18); background: #27272a; color: #f4f4f5; font: inherit; }
+        input[type=checkbox] { width: 20px; height: 20px; }
+        button { border: 0; border-radius: 8px; padding: 7px 10px; font: inherit; cursor: pointer; background: rgba(255,255,255,.1); color: #f4f4f5; }
+        button:hover { background: rgba(255,255,255,.18); }
+        .rst { padding: 5px 8px; }
+        .save { background: #16a34a; font-weight: 700; }
+        .save:hover { background: #15803d; }
+        footer { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-top: 1px solid rgba(255,255,255,.1); }
+        footer .grow { flex: 1; }
+        @media (max-width: 560px) {
+          .box { width: 100vw; height: 100%; max-height: none; border-radius: 0; top: 0; left: 0; transform: none; }
+          .row { grid-template-columns: 1fr; }
+          .ctl { grid-column: 1; grid-row: auto; justify-content: stretch; }
+        }
+      </style>
+      <div class="back"></div>
+      <div class="box" role="dialog" aria-label="Réglages">
+        <header><b>⚙ Réglages — ${esc(title)}</b><button type="button" class="close" title="Fermer">✕</button></header>
+        <div class="tools"><input class="q" type="search" placeholder="Chercher (mot, unité, nom du réglage)…">
+          <label><input type="checkbox" class="only"> modifiés seulement</label></div>
+        <div class="note">Seules les valeurs changées sont gardées ; elles restent après une mise à jour du script.
+          Les autres onglets du site les prennent à leur prochain chargement.</div>
+        <div class="list">${groups}</div>
+        <footer><button type="button" class="save">Enregistrer et recharger</button><button type="button" class="exp">Exporter</button>
+          <button type="button" class="imp">Importer</button><button type="button" class="all">Tout rétablir</button>
+          <span class="grow"></span><button type="button" class="close">Fermer</button></footer>
+      </div>`;
+      const rows = [...root.querySelectorAll('.row')];
+      const search = root.querySelector('.q');
+      const only = root.querySelector('.only');
+      const valueOf = (el) => {
+        const input = el.querySelector('.ctl input');
+        return input.type === 'checkbox' ? input.checked : read(el.dataset.path, input.value);
+      };
+      function refresh(el) {
+        const p = el.dataset.path;
+        const v = valueOf(el);
+        const why = problem(p, v);
+        el.querySelector('.err').textContent = why;
+        el.classList.toggle('bad', !!why);
+        el.classList.toggle('mod', !why && !same(v, get(defaults, p)));
+      }
+      function counts() {
+        for (const det of root.querySelectorAll('details')) {
+          const n = det.querySelectorAll('.row.mod, .row.bad').length;
+          det.querySelector('.n').textContent = n ? ` · ${n} modifié${n > 1 ? 's' : ''}` : '';
+        }
+      }
+      function filter() {
+        const q = plain(search.value.trim());
+        for (const det of root.querySelectorAll('details')) {
+          const inGroup = !!q && plain(det.querySelector('summary').textContent).includes(q);
+          let any = false;
+          for (const el of det.querySelectorAll('.row')) {
+            const hit = (!q || inGroup || plain(`${el.querySelector('.lbl').textContent} ${el.querySelector('.def').textContent}`).includes(q))
+              && (!only.checked || el.matches('.mod, .bad'));
+            el.hidden = !hit;
+            any = any || hit;
+          }
+          det.hidden = !any;
+          if (q || only.checked) det.open = any;
+        }
+      }
+      const setRow = (el, v) => {
+        const input = el.querySelector('.ctl input');
+        if (input.type === 'checkbox') input.checked = !!v;
+        else input.value = show(v);
+        refresh(el);
+      };
+      // Valeurs de la fenêtre : écarts aux valeurs par défaut, et erreurs.
+      function collect() {
+        const out = {};
+        const bad = [];
+        for (const el of rows) {
+          const p = el.dataset.path;
+          const v = valueOf(el);
+          const why = problem(p, v);
+          if (why) bad.push(`${info.get(p).label} (${p}) : ${why}`);
+          else if (!same(v, get(defaults, p))) out[p] = v;
+        }
+        return { out, bad };
+      }
+      const close = () => {
+        const { out, bad } = collect();
+        if ((bad.length || !same(out, applied)) && !confirm('Fermer sans enregistrer les changements ?')) return;
+        host.remove();
+      };
+      rows.forEach(refresh);
+      counts();
+      root.addEventListener('input', (e) => {
+        const el = e.target.closest('.row');
+        if (el) {
+          refresh(el);
+          counts();
+        }
+        if (e.target === search || e.target === only) filter();
+      });
+      root.addEventListener('change', (e) => {
+        const el = e.target.closest('.row');
+        if (el) {
+          refresh(el);
+          counts();
+        }
+        if (e.target === only) filter();
+      });
+      root.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') close();
+      });
+      root.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        if (b.classList.contains('rst')) {
+          const el = b.closest('.row');
+          setRow(el, get(defaults, el.dataset.path));
+          counts();
+        } else if (b.classList.contains('close')) {
+          close();
+        } else if (b.classList.contains('all')) {
+          if (!confirm('Remettre toutes les valeurs par défaut ? (Rien n’est enregistré avant « Enregistrer ».)')) return;
+          for (const el of rows) setRow(el, get(defaults, el.dataset.path));
+          counts();
+          filter();
+        } else if (b.classList.contains('save')) {
+          const { out, bad } = collect();
+          if (bad.length) {
+            alert(`Valeurs à corriger avant d’enregistrer :\n- ${bad.join('\n- ')}`);
+            return;
+          }
+          GM_setValue(storeKey, out);
+          host.remove();
+          location.reload();
+        } else if (b.classList.contains('exp')) {
+          const { out, bad } = collect();
+          if (bad.length) {
+            alert(`Valeurs à corriger avant d’exporter :\n- ${bad.join('\n- ')}`);
+            return;
+          }
+          const n = Object.keys(out).length;
+          GM_setClipboard(JSON.stringify(out, null, 1), 'text');
+          alert(`${n} valeur${n > 1 ? 's' : ''} modifiée${n > 1 ? 's' : ''} copiée${n > 1 ? 's' : ''} dans le presse-papiers (texte à coller dans « Importer »).`);
+        } else if (b.classList.contains('imp')) {
+          const text = prompt('Collez les réglages exportés. Les valeurs absentes du texte reprennent leur valeur par défaut ; rien n’est enregistré avant « Enregistrer ».', '');
+          if (text === null || !text.trim()) return;
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch (err) {
+            data = null;
+          }
+          if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            alert('Texte illisible : collez le texte copié par « Exporter ».');
+            return;
+          }
+          const refused = Object.entries(data).filter(([p, v]) => !rows.some((el) => el.dataset.path === p) || problem(p, v))
+            .map(([p, v]) => `${p} (${problem(p, v) || 'réglage inconnu'})`);
+          for (const el of rows) {
+            const p = el.dataset.path;
+            setRow(el, p in data && !problem(p, data[p]) ? data[p] : get(defaults, p));
+          }
+          counts();
+          filter();
+          const n = Object.keys(data).length - refused.length;
+          alert(`${n} valeur${n > 1 ? 's' : ''} importée${n > 1 ? 's' : ''}.${refused.length ? `\nIgnorées : ${refused.join(', ')}` : ''}\nVérifiez, puis « Enregistrer et recharger ».`);
+        }
+      });
+      (document.body || document.documentElement).appendChild(host);
+    }
+    const n = Object.keys(applied).length;
+    GM_registerMenuCommand(`⚙ Réglages${n ? ` (${n} valeur${n > 1 ? 's' : ''} modifiée${n > 1 ? 's' : ''})` : ''}`, open);
+    return { open, isOpen, summary, applied, ignored, defaults };
+  }
+  // (fin de makeSettings)
 
   // ---------------------------------------------------------------------------
   // Diagnostic : seulement la fenêtre de la carte, pour caler les sélecteurs
@@ -2987,7 +3777,7 @@
   GM_registerMenuCommand('Prime shiny : voir l’estimation', () => {
     alert(`${shinyReport()}\n\nComment c’est mesuré : chaque vente shiny connue est comparée aux ventes normales de la même carte `
       + `(même rareté, à ±${CONFIG.shiny.baselineDays} jours). Chaque carte compte une fois ; on prend la médiane entre cartes, `
-      + 'avec un intervalle de confiance à 90 % (bootstrap). Les ventes shiny sont reconnues grâce aux enchères shiny vues sur le marché : '
+      + `avec un intervalle de confiance à ${Math.round((CONFIG.shiny.ciRange[1] - CONFIG.shiny.ciRange[0]) * 100)} % (bootstrap). ` + 'Les ventes shiny sont reconnues grâce aux enchères shiny vues sur le marché : '
       + 'plus tu passes sur le marché, plus la mesure est précise.');
   });
 
@@ -2997,6 +3787,7 @@
     const report = [
       `URL : ${location.href}`,
       `Version : ${scriptVersion()} · copies actives sur la page : ${activeCopies()}`,
+      `Réglages modifiés : ${settings.summary()}`,
       `Fiche repérée : ${view ? 'oui' : 'non'} · onglet Marché : ${view ? view.onMarket : '—'} · formulaire ouvert : ${view ? view.formOpen : '—'}`,
       `Titres : ${view ? cardTitles(view.container).join(' | ') : '—'} · rareté : ${view ? cardRarity(view.container) : '—'}`,
       `Identifiants vus dans les requêtes : ${seenIds.slice(0, 5).join(', ') || 'aucun'}`,
@@ -3059,7 +3850,7 @@
     }
     alert(`Deux aides à la vente tournent en même temps sur ce téléphone (celle-ci : version téléphone v${scriptVersion()}).\n\n`
       + 'Dans Tampermonkey, désactive « Wiki Masters — aide à la vente » (version ordinateur) : sur le téléphone, seule la version téléphone doit rester active.');
-  }, 5000);
+  }, CONFIG.tech.dupCheckMs);
 
   // Exposé pour les tests.
   if (CONFIG.debug) {

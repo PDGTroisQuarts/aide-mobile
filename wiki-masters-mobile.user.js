@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.8.0
+// @version      1.9.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -206,9 +206,6 @@
     autoOpenMarket: true,
     // Attente avant ce dernier recours : aucune, pour avoir le conseil au plus vite.
     autoOpenDelayMs: 0,
-    // Prix « Ambitieux » : chaque mise en vente ratée (carte à remettre en
-    // vente) est comptée comme une perte de (1 − relistKeep) du prix.
-    relistKeep: 0.85,
     // Les ventes de plus de 30 jours ne servent plus au profil horaire.
     keepSalesDays: 30,
     // Base horaire commune à toutes les cartes évaluées. Une heure avec peu de
@@ -279,12 +276,14 @@
     },
     // Aide à l'achat (pastilles sur /marketplace).
     buy: {
-      // Plafonds seulement à partir de ce nombre de ventes.
-      minSales: 8,
-      // « À garder » : attendre une autre occasion coûte 5 % de la médiane.
-      waitCost: 0.05,
-      // « À revendre » : marge visée sur la valeur de revente (25 % = plafond à 80 %).
-      resaleMargin: 0.25,
+      // Mise max pour revendre (v0.23.0) = vente rapide − resaleGap : au moins
+      // resaleGap wikibidous de gain en revendant au prix de vente rapide
+      // (300 = 1,5 étoile), comme le plafond « Revente » du bot de surenchère.
+      resaleGap: 300,
+      // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
+      // fois sur les stats.countDays derniers jours : son prix vient de
+      // vieilles ventes (ex. Karl Marx L à 33 000).
+      minRecentSales: 5,
       // Pas minimal d'une surenchère, relevé sur les notifications (+10 %).
       bidStep: 0.1,
       // Lecture des ventes pour les pastilles : 3 lectures simultanées au plus,
@@ -318,15 +317,14 @@
       // la médiane, ou moins de la médiane divisée par outlierFactor.
       outlierMinSales: 5,
       outlierFactor: 3,
-      // Conseil de prix à partir de minSales ventes ; « Ambitieux » à partir de
-      // ambitiousMinSales, borné entre ces quantiles (P60 et P75).
+      // Conseil de prix à partir de minSales ventes. Prix conseillés (v0.23.0) :
+      // « Vente rapide » = quickQuantile des ventes (P35), « Normal » = la
+      // médiane, « Ambitieux » = ambitiousQuantile (P70), à partir de
+      // ambitiousMinSales ventes.
       minSales: 3,
+      quickQuantile: 0.35,
+      ambitiousQuantile: 0.7,
       ambitiousMinSales: 8,
-      ambitiousRange: [0.6, 0.75],
-      // « Vente rapide » = ce quantile des ventes (0,25 = P25) ; le plafond
-      // revente reste au moins capQuickGap sous la vente rapide.
-      quickQuantile: 0.25,
-      capQuickGap: 1,
       // Confiance : faible sous la 1re valeur de ventes, moyenne sous la 2e.
       confidence: [8, 20],
       // Ventes comptées pour 💤 (jours) et pour 🔥 (heures) ; écart mesuré
@@ -517,10 +515,9 @@
       'stats.outlierMinSales': 'Prix aberrants écartés à partir de (ventes)',
       'stats.outlierFactor': 'Prix aberrant : plus de N fois la médiane, ou moins de la médiane / N [>0]',
       'stats.minSales': 'Conseil de prix à partir de (ventes)',
-      'stats.quickQuantile': '« Vente rapide » = ce quantile des ventes (0,25 = P25) [0-1]',
+      'stats.quickQuantile': '« Vente rapide » = ce quantile des ventes (0,35 = P35) [0-1]',
       'stats.ambitiousMinSales': '« Ambitieux » à partir de (ventes)',
-      'stats.ambitiousRange': '« Ambitieux » borné entre ces quantiles (min ; max) [0-1]',
-      relistKeep: '« Ambitieux » : part du prix gardée à chaque remise en vente [0-1]',
+      'stats.ambitiousQuantile': '« Ambitieux » = ce quantile des ventes (0,7 = P70) [0-1]',
       'stats.confidence': 'Confiance faible sous, moyenne sous (ventes ; ventes)',
       'stats.memoMs': 'Conseils d’une carte recalculés au plus toutes les (ms)',
     }],
@@ -560,11 +557,9 @@
       collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
     }],
     ['Aide à l’achat (marché)', {
-      'buy.minSales': 'Plafond revente à partir de (ventes)',
-      'buy.waitCost': '« À garder » : coût d’attendre une autre occasion (part de la médiane)',
-      'buy.resaleMargin': 'Marge visée sur la valeur de revente (0,25 = plafond à 80 %)',
+      'buy.resaleGap': 'Mise max pour revendre = vente rapide moins (wikibidous ; 300 = 1,5 étoile)',
+      'buy.minRecentSales': 'Ni étoiles ni mise max sous (ventes sur la période 💤, 7 jours par défaut)',
       'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
-      'stats.capQuickGap': 'Plafond revente au moins sous la vente rapide de (wikibidous)',
       'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
       'buy.cacheMinutes': 'Historique gardé en mémoire (minutes)',
       'buy.summaryHours': 'Pastilles : valeur relue si plus vieille que (heures)',
@@ -794,6 +789,14 @@
   const sales48h = (sales, rarity, now, shiny = false) => sales
     .filter((s) => (!rarity || s.rarity === rarity) && now - tsOf(s) <= CONFIG.stats.hotHours * 3600000 && isShinySale(s) === shiny).length;
   const isHot = (sales48) => sales48 != null && sales48 >= CONFIG.hotSales48h;
+  // Étoiles et mises max automatiques (v0.23.0) : seulement pour une carte
+  // vendue au moins minRecentSales fois sur les countDays derniers jours (même
+  // rareté, même version). Sinon son prix vient de vieilles ventes : ni
+  // étoiles ni mise max.
+  const liquid = (sales7) => sales7 != null && sales7 >= CONFIG.buy.minRecentSales;
+  // Mise max pour revendre : vente rapide − resaleGap (300 = 1,5 étoile de
+  // gain), jamais négative ; null si la carte ne se vend pas assez.
+  const resaleCapOf = (quick, sales7) => (quick != null && liquid(sales7) ? Math.max(0, quick - CONFIG.buy.resaleGap) : null);
   // Carte peu vendue et peu chère : ne vaut pas une place sur le marché.
   // Jours entre la dernière vente et la 10e dernière (même rareté, même
   // version) ; null s'il y en a moins de 10.
@@ -818,24 +821,19 @@
 
     const n = prices.length;
     const share = (p) => countAtLeast(prices, p) / n;
-    const p25 = quantile(prices, CONFIG.stats.quickQuantile);
+    const quickRaw = quantile(prices, CONFIG.stats.quickQuantile);
     const median = quantile(prices, 0.5);
 
     // « Normal » = la médiane exacte des ventes retenues (v0.21.0, à la demande
     // de l'utilisateur ; avant : le prix qui maximisait prix × part des ventes).
     const best = median;
-    // « Ambitieux » : la carte peut être remise en vente si elle ne part pas.
-    // Valeur d'une mise en vente à p, en comptant les remises en vente :
-    //   V(p) = p × S / (1 − k × (1 − S)), S = part des ventes ≥ p, k = relistKeep.
-    // On garde le p qui maximise V, borné entre P60 et P75 (25 à 40 % des
-    // ventes l'ont atteint) ; seulement à partir de 8 ventes.
-    let ambitiousRaw = null;
-    if (n >= CONFIG.stats.ambitiousMinSales) {
-      ambitiousRaw = resaleValue(prices).price;
-      ambitiousRaw = Math.min(Math.max(ambitiousRaw, quantile(prices, CONFIG.stats.ambitiousRange[0])), quantile(prices, CONFIG.stats.ambitiousRange[1]));
-    }
-    // Prix exacts, sans arrondi : un prix précis est plus vendeur.
-    const quick = Math.max(1, Math.round(p25));
+    // « Ambitieux » = P70 des ventes retenues (v0.23.0, à la demande de
+    // l'utilisateur ; avant : la meilleure valeur de revente, bornée entre P60
+    // et P75), seulement à partir de ambitiousMinSales ventes.
+    const ambitiousRaw = n >= CONFIG.stats.ambitiousMinSales ? quantile(prices, CONFIG.stats.ambitiousQuantile) : null;
+    // Prix exacts, sans arrondi : un prix précis est plus vendeur. « Vente
+    // rapide » = P35 (v0.23.0 ; P25 avant).
+    const quick = Math.max(1, Math.round(quickRaw));
     const normal = Math.max(quick, Math.round(best));
     const ambitious = ambitiousRaw === null ? null : Math.max(normal + 1, Math.round(ambitiousRaw));
     return {
@@ -857,52 +855,18 @@
     };
   }
 
-  // Valeur de revente d'une carte (prix triés) : ce que rapporte en moyenne une
-  // mise en vente au meilleur prix p, remises en vente comprises :
-  //   V(p) = p × S / (1 − k × (1 − S)), S = part des ventes ≥ p, k = relistKeep.
-  function resaleValue(prices) {
-    const n = prices.length;
-    const k = CONFIG.relistKeep;
-    let best = { value: -1, price: null };
-    for (const p of new Set(prices)) {
-      const sh = countAtLeast(prices, p) / n;
-      const value = (p * sh) / (1 - k * (1 - sh));
-      if (value > best.value) best = { value, price: p };
-    }
-    return best;
-  }
-
-  // Prix de réserve de la recherche séquentielle (McCall, 1970) : acheter
-  // maintenant dès que le prix est ≤ r, où r vérifie E[(r − P)⁺] = c. c est le
-  // coût d'attendre une autre occasion ; P suit la loi des ventes récentes.
-  function reservationPrice(prices, c) {
-    const gain = (r) => prices.reduce((sum, p) => sum + Math.max(0, r - p), 0) / prices.length;
-    let lo = 0;
-    let hi = prices[prices.length - 1] + c;
-    for (let i = 0; i < 50; i++) {
-      const mid = (lo + hi) / 2;
-      if (gain(mid) < c) lo = mid;
-      else hi = mid;
-    }
-    return lo;
-  }
-
-  // Aide à l'achat : où se place un prix parmi les ventes récentes, et les deux
-  // plafonds (carte à garder, carte à revendre). Plafonds à partir de minSales ventes.
+  // Aide à l'achat : où se place un prix parmi les ventes retenues, vente
+  // rapide et médiane. La mise max pour revendre (vente rapide − resaleGap) et
+  // les étoiles dépendent aussi des ventes récentes : voir liquid et resaleCapOf
+  // (v0.23.0 ; la valeur de revente / 1,25 et le plafond « à garder » de McCall
+  // ne servent plus).
   function buyAdvice(sales, rarity, now, shiny = false, poolData = salesPool(sales, rarity, now, shiny)) {
     const { pool, period, prices } = poolData;
     const n = prices.length;
     if (pool.length < CONFIG.stats.minSales || !n) return { enough: false, n };
     const median = quantile(prices, 0.5);
-    const advice = { enough: true, n, period, median, min: prices[0], max: prices[n - 1], keepCap: null, resaleCap: null, resale: null,
+    const advice = { enough: true, n, period, median, min: prices[0], max: prices[n - 1],
       quick: Math.max(1, Math.round(quantile(prices, CONFIG.stats.quickQuantile))) };
-    if (n >= CONFIG.buy.minSales) {
-      advice.keepCap = Math.floor(reservationPrice(prices, CONFIG.buy.waitCost * median));
-      advice.resale = resaleValue(prices).value;
-      // Toujours sous la vente rapide (v0.21.0) : revendue vite, la carte
-      // rapporte encore quelque chose.
-      advice.resaleCap = Math.min(Math.floor(advice.resale / (1 + CONFIG.buy.resaleMargin)), advice.quick - CONFIG.stats.capQuickGap);
-    }
     // Rang centile d'un prix : part des ventes moins chères (ex æquo pour moitié).
     advice.percentile = (price) => {
       const below = n - countAtLeast(prices, price);
@@ -1345,7 +1309,7 @@
         const a = buyAdvice(sales, rarity, now, shiny, pool);
         const pa = a.enough ? priceAdvice(sales, rarity, now, shiny, pool) : null;
         r[shiny ? `${rarity}✦` : rarity] = a.enough
-          ? [a.median, a.n, a.resaleCap, a.keepCap, a.resale === null ? null : Math.round(a.resale), pa.normal, sales7d(sales, rarity, now, shiny), pa.quick,
+          ? [a.median, a.n, null, null, null, pa.normal, sales7d(sales, rarity, now, shiny), pa.quick,
             span10d(sales, rarity, shiny) ?? -1, sales48h(sales, rarity, now, shiny)]
           : [null, a.n];
       }
@@ -1382,7 +1346,9 @@
     // Résumé d'avant la v0.8 (sans prix « Normal ») : à relire.
     if (v[0] !== null && v.length < 6) return null;
     // Résumé d'avant la v0.9.2 (sans ventes sur 7 jours) : affiché, et relu.
-    return { median: v[0], n: v[1], resaleCap: v[2] ?? null, keepCap: v[3] ?? null, resale: v[4] ?? null, normal: v[5] ?? null,
+    // Mise max pour revendre calculée ici (v0.23.0) : les résumés anciens
+    // (plafond de l'ancien modèle en v[2]) suivent la nouvelle règle.
+    return { median: v[0], n: v[1], resaleCap: resaleCapOf(v[7] ?? null, v[6] ?? null), normal: v[5] ?? null,
       sales7: v[6] ?? null, sales48: v.length >= 10 ? v[9] : undefined, quick: v[7] ?? null, span10: v[8] === undefined ? undefined : v[8] < 0 ? null : v[8],
       stale: stale || (v[0] !== null && v.length < 7), t: e.t || null };
   }
@@ -1524,9 +1490,8 @@
     if (!p || base.median === null) return { ...base, shinyVia: 'inconnue' };
     const k = 1 + p.beta;
     const up = (x) => (x == null ? x : Math.round(x * k));
-    const cap = (x) => (x == null ? x : Math.floor(x * k));
-    return { ...base, median: up(base.median), normal: up(base.normal), quick: up(base.quick), resale: up(base.resale),
-      resaleCap: cap(base.resaleCap), keepCap: cap(base.keepCap), shinyVia: 'prime', premium: p };
+    return { ...base, median: up(base.median), normal: up(base.normal), quick: up(base.quick),
+      resaleCap: resaleCapOf(up(base.quick), base.sales7), shinyVia: 'prime', premium: p };
   }
   // Même chose pour les conseils complets (fiche, page d'une enchère).
   function shinyAdvice(sales, rarity) {
@@ -1537,7 +1502,6 @@
     if (!p || !base.buy.enough) return { ...base, via: 'inconnue' };
     const k = 1 + p.beta;
     const up = (x) => (x == null ? x : Math.round(x * k));
-    const cap = (x) => (x == null ? x : Math.floor(x * k));
     const pr = base.price;
     const b = base.buy;
     return {
@@ -1547,7 +1511,7 @@
       via: 'prime',
       premium: p,
       price: pr.enough ? { ...pr, quick: up(pr.quick), normal: up(pr.normal), ambitious: up(pr.ambitious), min: up(pr.min), median: up(pr.median), max: up(pr.max) } : pr,
-      buy: { ...b, median: up(b.median), min: up(b.min), max: up(b.max), keepCap: cap(b.keepCap), resaleCap: cap(b.resaleCap), resale: up(b.resale), quick: up(b.quick),
+      buy: { ...b, median: up(b.median), min: up(b.min), max: up(b.max), quick: up(b.quick),
         percentile: (price) => b.percentile(price / k) },
     };
   }
@@ -2532,15 +2496,31 @@
     const head = `${info.title || 'Carte'}${info.rarity ? ` (${info.rarity}${info.shiny ? ' ✦ shiny' : ''})` : ''}`;
     if (sum.median === null) return { bg: null, text: `${star}${sum.n} v.`, tip: `${head} : trop peu de ventes pour comparer (${sum.n}).` };
     if (info.pay === null) return { bg: null, text: '—', tip: `${head} : prix illisible.` };
+    const collection = !!collectionMem[info.cardId];
+    const collectionLine = collection
+      ? '📚 Carte de collection : plafond = médiane. Clic : retirer de la collection.'
+      : 'Clic : marquer comme carte de collection (plafond = médiane).';
+    // Carte peu vendue ces derniers jours (v0.23.0) : prix tiré de vieilles
+    // ventes, ni étoiles ni mise max.
+    if (!liquid(sum.sales7)) {
+      const recent = sum.sales7 ?? '?';
+      return {
+        bg: null,
+        text: `${collection ? '📚 ' : ''}${star}💤 ${recent}/${CONFIG.stats.countDays} j`,
+        tip: `${head} — ${recent} vente(s) en ${CONFIG.stats.countDays} jours (il en faut ${CONFIG.buy.minRecentSales}) : prix incertain, tiré de ventes anciennes. `
+          + 'Ni étoiles ni mise max (surenchère : plafond « Manuel » seulement).\n'
+          + `Médiane ${fmtPrice(sum.median)} · vente rapide ${sum.quick != null ? fmtPrice(sum.quick) : '—'} (${sum.n} ventes retenues)\n`
+          + `${collectionLine}\nDétail complet : ouvre l’enchère.`,
+      };
+    }
     // Étoiles : gain en revendant au prix de vente rapide (réglable : médiane).
     const ref = refOf(sum);
     const gain = ref.price - info.pay;
     const stars = starsOf(gain);
-    const collection = !!collectionMem[info.cardId];
     const unsure = info.shiny && sum.shinyVia === 'inconnue';
-    const caps = sum.resaleCap === null
-      ? `Plafond revente : il faut au moins ${CONFIG.buy.minSales} ventes.`
-      : `Plafond revente : ${fmtPrice(sum.resaleCap)} (revente estimée ${fmtPrice(sum.resale)})`;
+    const caps = sum.resaleCap == null
+      ? 'Mise max pour revendre : vente rapide inconnue (relecture en cours).'
+      : `Mise max pour revendre : ${fmtPrice(sum.resaleCap)} (vente rapide ${fmtPrice(sum.quick)} − ${CONFIG.buy.resaleGap})`;
     return {
       bg: starColor(stars),
       text: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${fmtStars(stars)}${unsure ? ' ?' : ''}`,
@@ -2550,10 +2530,7 @@
         + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, revente (${ref.name}) ${fmtPrice(ref.price)} → ${fmtGain(gain)} wikibidous : ${fmtStars(stars)}\n`
         + `Vente rapide ${sum.quick != null ? fmtPrice(sum.quick) : '—'} · normale ${sum.normal != null ? fmtPrice(sum.normal) : '—'} · médiane ${fmtPrice(sum.median)}\n${caps}\n`
         + (isHot(sum.sales48) ? `🔥 Se vend beaucoup : ${sum.sales48} ventes en ${CONFIG.stats.hotHours} h\n` : '')
-        + (collection
-          ? `📚 Carte de collection : plafond = médiane. Clic : retirer de la collection.`
-          : `Clic : marquer comme carte de collection (plafond = médiane).`)
-        + '\nDétail complet : ouvre l’enchère.',
+        + `${collectionLine}\nDétail complet : ouvre l’enchère.`,
     };
   }
 
@@ -2984,7 +2961,7 @@
         buy.title = buy.auction.title || data.wikipedia_title;
       }
       const adv = buy.auction.shiny ? shinyAdvice(buy.sales, buy.auction.rarity) : adviceFor(buy.sales, buy.auction.rarity);
-      Object.assign(buy, { advice: adv.buy, price: adv.price, via: adv.via || null, premium: adv.premium || null, status: '' });
+      Object.assign(buy, { advice: adv.buy, price: adv.price, sales7: adv.sales7 ?? null, via: adv.via || null, premium: adv.premium || null, status: '' });
     } catch (err) {
       buy.status = `Erreur : ${err.message}`;
     } finally {
@@ -3018,15 +2995,21 @@
       const other = ref.name === DELTA_REFS.quick ? ['Revente à la médiane', Math.round(adv.median)] : ['Revente rapide', pr.quick];
       const otherGain = pay != null && other[1] != null ? other[1] - pay : null;
       const collection = !!collectionMem[a.cardId];
+      // Ventes récentes (v0.23.0) : moins de minRecentSales → ni étoiles ni mise max.
+      const recentOk = liquid(buy.sales7);
+      const recentNote = `${buy.sales7 ?? '?'} vente(s) en ${CONFIG.stats.countDays} jours (il en faut ${CONFIG.buy.minRecentSales})`;
+      const resaleCap = resaleCapOf(adv.quick, buy.sales7);
+      const collectionCap = recentOk ? Math.floor(adv.median) : null;
       const verdict = pay == null ? null
-        : adv.resaleCap !== null && pay <= adv.resaleCap ? ['wv-quick', '✅ Bonne affaire, même pour revendre']
+        : !recentOk ? ['', `💤 Prix incertain : ${recentNote}. Ni étoiles ni mise max.`]
+        : resaleCap !== null && pay <= resaleCap ? ['wv-quick', '✅ Bonne affaire, même pour revendre']
         : pay <= adv.median ? ['wv-ambitious', `${collection ? '📚 ' : ''}Acceptable pour la collection (sous la médiane)`]
         : ['wv-bad', '⛔ Trop cher : au-dessus de la médiane'];
       if (pay != null) {
-        body += `<div class="wv-row" style="--wv-c:${starColor(stars)}"><div>
+        body += `<div class="wv-row" style="--wv-c:${recentOk ? starColor(stars) : CONFIG.colors.unknown}"><div>
           <div class="wv-label">${a.current == null ? 'Mise de départ' : 'Prochaine mise'}</div>
-          <div class="wv-price">${fmtPrice(pay)}<small>${starsHtml(stars)} ${fmtGain(gain)} en revendant (${esc(ref.name)} ${fmtPrice(ref.price)}) · P${Math.round(adv.percentile(pay) * 100)}</small></div>
-          ${otherGain != null ? `<div class="wv-when" style="--wv-c:${starColor(starsOf(otherGain))}">${other[0]} (${fmtPrice(other[1])}) : ${starsHtml(starsOf(otherGain))} ${fmtGain(otherGain)}</div>` : ''}
+          <div class="wv-price">${fmtPrice(pay)}<small>${recentOk ? `${starsHtml(stars)} ${fmtGain(gain)} en revendant (${esc(ref.name)} ${fmtPrice(ref.price)}) · ` : ''}P${Math.round(adv.percentile(pay) * 100)}</small></div>
+          ${recentOk && otherGain != null ? `<div class="wv-when" style="--wv-c:${starColor(starsOf(otherGain))}">${other[0]} (${fmtPrice(other[1])}) : ${starsHtml(starsOf(otherGain))} ${fmtGain(otherGain)}</div>` : ''}
           ${a.leader ? `<div class="wv-when">En tête : ${esc(a.leader)}${a.current != null ? ` à ${fmtPrice(a.current)}` : ''}</div>` : ''}
         </div></div>`;
         body += `<div class="wv-tip ${verdict[0]}">${esc(verdict[1])}</div>`;
@@ -3035,11 +3018,12 @@
       // Mises maximales, sur une ligne : revendre, collection.
       const cap = (cls, label, value) => (value === null ? ''
         : `<div class="wv-cap ${cls}"><span>${label}</span><b>${fmtPrice(value)} ${pay == null ? '' : pay <= value ? '✓' : '✗'}</b></div>`);
-      body += `<div class="wv-caps">${cap('wv-quick', 'max revente', adv.resaleCap)}`
-        + `${cap('wv-ambitious', 'max collection', Math.floor(adv.median))}</div>`;
-      if (adv.resaleCap !== null) body += `<div class="wv-status">Revente estimée ${fmtPrice(adv.resale)}</div>`;
-      buy.summary = pay == null ? '' : `<span style="--wv-c:${starColor(stars)}">${starsHtml(stars)}</span> ${verdict[1].split(' ')[0]}`;
-      if (adv.resaleCap === null) body += `<div class="wv-status">Mise max pour revendre : il faut au moins ${CONFIG.buy.minSales} ventes.</div>`;
+      body += `<div class="wv-caps">${cap('wv-quick', 'max revente', resaleCap)}`
+        + `${cap('wv-ambitious', 'max collection', collectionCap)}</div>`;
+      if (resaleCap !== null) body += `<div class="wv-status">Max revente = vente rapide ${fmtPrice(adv.quick)} − ${CONFIG.buy.resaleGap}</div>`;
+      buy.summary = pay == null ? '' : recentOk ? `<span style="--wv-c:${starColor(stars)}">${starsHtml(stars)}</span> ${verdict[1].split(' ')[0]}`
+        : `💤 ${buy.sales7 ?? '?'}/${CONFIG.stats.countDays} j`;
+      if (!recentOk) body += `<div class="wv-status">Pas de mise max : ${recentNote}.</div>`;
       body += `<div class="wv-status">Ventes (${esc(adv.period)}) : ${fmtPrice(adv.min)} – ${fmtPrice(adv.max)}, médiane ${fmtPrice(adv.median)}`
         + `${pr.quick != null ? ` · vente rapide ${fmtPrice(pr.quick)}, normale ${fmtPrice(pr.normal)}` : ''}</div>`;
     }
@@ -3064,8 +3048,8 @@
   // façon, le plus récent l'emporte. Le téléphone ne mise jamais.
   // Données : la liste « Mes enchères » que la page du marché charge elle-même
   // (aucune requête en plus), relue ensuite toutes les 2 à 5 min tant que la
-  // page est affichée ; plafonds calculés comme sur la tablette (revente = valeur
-  // de revente / 1,25 dès 8 ventes, collection = médiane dès 3 ventes).
+  // page est affichée ; plafonds calculés comme sur la tablette (revente = vente
+  // rapide − 300, collection = médiane ; rien sous 5 ventes en 7 jours).
   const KEY_R_TOPIC = 'wr.topic';
   const KEY_R_MODES = 'wr.modes';
   const KEY_R_MODES_AT = 'wr.modesAt';
@@ -3269,13 +3253,16 @@
       if ((known && Date.now() - known.at < CONFIG.remote.capsMaxAgeMs) || remote.capsBusy.has(key)) continue;
       remote.capsBusy.add(key);
       fetchSales(a.cardId, CONFIG.buy.cacheMinutes * 60000, 'bulk').then((data) => {
-        const own = a.shiny ? adviceFor(data.sales || [], a.rarity, true).buy : null;
-        const useOwn = !!own && own.enough && own.n >= CONFIG.shiny.ownMinSales;
-        const b = useOwn ? own : adviceFor(data.sales || [], a.rarity, false).buy;
-        // 3 à 7 ventes : revente prudente, 80 % de la vente la plus basse, comme la tablette (v1.6.3).
-        const thin = b.enough && b.resaleCap == null && b.min != null ? Math.min(Math.floor(b.min / (1 + CONFIG.buy.resaleMargin)), b.quick - CONFIG.stats.capQuickGap) : null;
-        remote.caps.set(key, { at: Date.now(), n: b.n || 0, resale: b.enough ? (b.resaleCap ?? thin) : null, thin: thin != null,
-          collection: b.enough ? Math.floor(b.median) : null, median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn });
+        const own = a.shiny ? adviceFor(data.sales || [], a.rarity, true) : null;
+        const useOwn = !!own && own.buy.enough && own.buy.n >= CONFIG.shiny.ownMinSales;
+        const adv = useOwn ? own : adviceFor(data.sales || [], a.rarity, false);
+        const b = adv.buy;
+        // Comme la tablette (v1.9.0) : revente = vente rapide − resaleGap,
+        // collection = médiane ; rien si moins de minRecentSales ventes en 7 jours.
+        const recentOk = b.enough && liquid(adv.sales7);
+        remote.caps.set(key, { at: Date.now(), n: b.n || 0, recent: adv.sales7 ?? 0, enough: recentOk,
+          resale: b.enough ? resaleCapOf(b.quick, adv.sales7) : null, collection: recentOk ? Math.floor(b.median) : null,
+          median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn });
       }).catch(() => {}).finally(() => remote.capsBusy.delete(key));
     }
   }
@@ -3315,7 +3302,7 @@
       const btn = (m, label) => `<button data-id="${esc(a.id)}" data-title="${esc(a.title)}" data-rmode="${m}" class="${mode === m ? 'on' : ''}">${label}</button>`;
       const next = nextOf(a);
       const capNote = invalid ? ' (plafond manuel refusé : choisis-en un autre)'
-        : c && cap == null && mode !== 'off' ? ` (${c.n} ventes : pas assez)`
+        : c && cap == null && mode !== 'off' ? ` (${c.recent ?? '?'} vente(s) en ${CONFIG.stats.countDays} j : prix incertain, pas de plafond auto ; « Manuel » seulement)`
           : a.shiny && c && c.shinyFallback && mode !== 'manual' && mode !== 'off' ? ' (shiny : plafond d’une carte normale)' : '';
       return `<div class="wr-row ${cls}">
         <div class="wr-t"><span>${esc(a.title)}${a.rarity ? ` · ${esc(a.rarity)}` : ''}${a.shiny ? ' ✦' : ''}</span><span class="wr-left" data-end="${a.end}"></span></div>
@@ -3854,7 +3841,7 @@
 
   // Exposé pour les tests.
   if (CONFIG.debug) {
-    window.__wvm = { priceAdvice, durationAdvice, buildProfile, profileAt, quantile, buyAdvice, resaleValue, reservationPrice, auctions, workerOk: () => workerOk,
+    window.__wvm = { priceAdvice, durationAdvice, buildProfile, profileAt, quantile, buyAdvice, liquid, resaleCapOf, auctions, workerOk: () => workerOk,
       gate, parseAmount, rValidMode, rCapOf, remote, capsKey, summaryFor, salesCache, deadIds };
   }
 

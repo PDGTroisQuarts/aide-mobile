@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.10.0
+// @version      1.11.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -434,6 +434,27 @@
       badgeTopPx: 6,
       nearScreenPx: 100,
     },
+    // Échanges (/trades) : prix de chaque carte et total de chaque côté.
+    trades: {
+      // Carte repérée par son titre : ancêtres examinés, largeur maximale (pixels).
+      cardDepth: 4,
+      cardMaxPx: 320,
+      // Côté d'un échange : ancêtres examinés ; au-delà de maxGroupCards cartes,
+      // pas de total (liste de toute une collection, par exemple).
+      groupDepth: 8,
+      maxGroupCards: 30,
+      // Libellé d'un côté : longueur maximale lue, longueur affichée.
+      labelMax: 60,
+      labelShown: 40,
+      // Total « Σ » : écart après le libellé du côté, ou au-dessus de ses
+      // cartes (pixels), jamais plus haut que sumMinTopPx ; couleur.
+      sumGapPx: 8,
+      sumMinTopPx: 22,
+      sumColor: '#e4e4e7',
+      // Diagnostic : réponses gardées, page copiée (caractères).
+      shapesKept: 6,
+      diagChars: 12000,
+    },
     // Détection de la page (avancé).
     detect: {
       minPx: 2,
@@ -643,6 +664,19 @@
       'ui.fillMsgMs': 'Message de « Remplir » affiché (ms)',
       'ui.badgeTopPx': 'Pastilles : décalage sous le haut de la carte (pixels)',
       'ui.nearScreenPx': 'Cartes lues d’abord : à l’écran ou à moins de (pixels)',
+    }],
+    ['Échanges (/trades)', {
+      'trades.cardDepth': 'Carte repérée par son titre : ancêtres examinés',
+      'trades.cardMaxPx': 'Carte repérée par son titre : largeur maximale (pixels)',
+      'trades.groupDepth': 'Côté d’un échange : ancêtres examinés',
+      'trades.maxGroupCards': 'Pas de total au-delà de (cartes par côté)',
+      'trades.labelMax': 'Libellé d’un côté : longueur maximale lue (caractères)',
+      'trades.labelShown': 'Libellé d’un côté : longueur affichée (caractères)',
+      'trades.sumGapPx': 'Total Σ : écart après le libellé du côté, ou au-dessus des cartes (pixels)',
+      'trades.sumMinTopPx': 'Total Σ : jamais plus haut que (pixels du haut de l’écran)',
+      'trades.sumColor': 'Total Σ : couleur (CSS)',
+      'trades.shapesKept': 'Diagnostic : réponses de la page gardées',
+      'trades.diagChars': 'Diagnostic : page copiée (caractères)',
     }],
     ['Détection de la page (avancé)', {
       'detect.minPx': 'Élément visible : taille minimale (pixels)',
@@ -2471,6 +2505,7 @@
     #wv-panel .wv-stars { --wv-sf: var(--wv-c); --wv-se: rgba(255,255,255,.22); }
     #wv-badges .wv-b.wv-loss { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
     #wv-panel .wv-loss { color: var(--wv-c); font-weight: 800; }
+    #wv-badges .wv-b.wv-sum { border: 1px solid rgba(0,0,0,.35); }
   `;
   document.head.appendChild(badgeStyle);
   document.body.appendChild(badgeLayer);
@@ -2564,6 +2599,7 @@
   function placeBadges() {
     placeIn(badges);
     placeIn(cardBadges);
+    placeSums();
   }
   function placeIn(map) {
     for (const [id, b] of map) {
@@ -2697,36 +2733,308 @@
     for (const face of document.querySelectorAll('div.rounded-2xl.overflow-hidden')) {
       const h3 = face.querySelector('h3');
       if (!h3 || face.closest('.fixed, [role="dialog"], [id^="marketplace-auction-"]') || panel.contains(face)) continue;
-      let rarity = (GLOW.exec(face.className) || [])[1];
-      rarity = rarity ? rarity.toUpperCase() : null;
-      const shinyBadge = face.querySelector('.shiny-badge');
-      if (!rarity && shinyBadge) rarity = badgeRarity(shinyBadge);
-      if (!rarity) {
-        for (const d of face.querySelectorAll('div, span')) {
-          if (!d.children.length && RARITIES.includes(norm(d.textContent))) {
-            rarity = norm(d.textContent);
-            break;
-          }
-        }
-      }
-      out.push({ face, title: norm(h3.textContent), rarity, shiny: !!shinyBadge || isShinyEl(face) });
+      out.push(faceInfo(face, norm(h3.textContent)));
     }
     return out;
+  }
+  // Rareté (classe glow-<rareté>, pastille, ou texte « SR ») et version shiny d'une carte.
+  function faceInfo(face, title) {
+    let rarity = (GLOW.exec(face.getAttribute('class') || '') || [])[1];
+    rarity = rarity ? rarity.toUpperCase() : null;
+    const shinyBadge = face.querySelector('.shiny-badge');
+    if (!rarity && shinyBadge) rarity = badgeRarity(shinyBadge);
+    if (!rarity) {
+      for (const d of face.querySelectorAll('div, span')) {
+        if (!d.children.length && RARITIES.includes(norm(d.textContent))) {
+          rarity = norm(d.textContent);
+          break;
+        }
+      }
+    }
+    return { face, title, rarity, shiny: !!shinyBadge || isShinyEl(face) };
   }
 
   // Profil d'un joueur (/profile/<pseudo>) : mêmes pastilles que la
   // collection, mais avec le prix de vente rapide, pour estimer ses cartes.
   const onProfile = () => /^\/profile(\/|$)/.test(location.pathname);
 
+  // ---------------------------------------------------------------------------
+  // Échanges (/trades), aide v0.25.0 / téléphone v1.11.0 : prix de vente rapide
+  // sur chaque carte (comme sur un profil) et total « Σ » de chaque côté d'un
+  // échange, avec l'écart avec l'autre côté. Lecture seule : aucun clic.
+  // ---------------------------------------------------------------------------
+  // Balisage réel pas encore relevé. Cartes cherchées comme dans la collection
+  // (div.rounded-2xl.overflow-hidden + h3), puis par la classe glow-<rareté>,
+  // puis par les titres reçus dans les réponses de la page (/api/, /rest/v1/).
+  const onTrades = () => /^\/trades(\/|$)/.test(location.pathname);
+  const tradeHints = new Map(); // titre simplifié → { title, rarity, shiny }
+  const tradeShapes = []; // forme des réponses lues sur /trades (diagnostic)
+  const EN_RARITY = { legendary: 'L', ultra_rare: 'UR', super_rare: 'SR', rare: 'R', uncommon: 'PC', common: 'C' };
+  function hintRarity(v) {
+    if (typeof v !== 'string' || v.length > 20) return null;
+    const up = norm(v).toUpperCase();
+    return RARITIES.includes(up) ? up : rarityCode(v) || EN_RARITY[simplify(v).replace(/[ -]/g, '_')] || null;
+  }
+  // Réponse de la page sur /trades : titres, rareté et version shiny des
+  // cartes (champ de la carte ou de l'objet qui la contient).
+  function noteTradeJson(url, json) {
+    let path = String(url);
+    try {
+      path = new URL(url, location.href).pathname;
+    } catch (err) {
+      // adresse illisible : gardée telle quelle
+    }
+    let sample = null;
+    let n = 0;
+    (function walk(obj, parent, depth) {
+      if (!obj || typeof obj !== 'object' || depth > 8 || n > 5000) return;
+      n++;
+      if (!Array.isArray(obj) && typeof obj.wikipedia_title === 'string') {
+        const rarity = hintRarity(obj.rarity) || hintRarity(obj.snapshot_rarity)
+          || (parent && (hintRarity(parent.rarity) || hintRarity(parent.snapshot_rarity))) || null;
+        const shiny = obj.is_shiny === true || !!(parent && parent.is_shiny === true);
+        const key = simplify(obj.wikipedia_title);
+        const old = tradeHints.get(key);
+        // Même titre en deux raretés : rareté inconnue (lue sur la carte).
+        tradeHints.set(key, { title: obj.wikipedia_title, rarity: old && old.rarity !== rarity ? null : rarity, shiny: (old && old.shiny) || shiny });
+        if (!sample) sample = `${Object.keys(obj).slice(0, 15).join(',')}${parent ? ` ← ${Object.keys(parent).slice(0, 15).join(',')}` : ''}`;
+      }
+      for (const v of Object.values(obj)) if (v && typeof v === 'object') walk(v, Array.isArray(obj) ? parent : obj, depth + 1);
+    })(json, null, 0);
+    const shape = `${path} : ${Array.isArray(json) ? `liste de ${json.length}` : `{${Object.keys(json || {}).slice(0, 12).join(', ')}}`}${sample ? ` · carte : ${sample}` : ''}`;
+    const i = tradeShapes.findIndex((s) => s.startsWith(`${path} :`));
+    if (i >= 0) tradeShapes.splice(i, 1);
+    tradeShapes.push(shape);
+    if (tradeShapes.length > CONFIG.trades.shapesKept) tradeShapes.shift();
+  }
+
+  const ourEl = (el) => panel.contains(el) || badgeLayer.contains(el);
+  // Libellé d'un côté (« Tu donnes », pseudo…) : texte court avec des lettres.
+  function labelText(el) {
+    const t = norm(el.textContent);
+    return t.length >= 3 && t.length <= CONFIG.trades.labelMax && /[a-zà-ÿ]/i.test(t) && !rarityCode(t) ? t : null;
+  }
+  // Libellé placé dans box AVANT ses cartes (un titre au-dessus d'une liste ;
+  // pas une légende sous une carte) : { text, el }.
+  function leadLabel(box, faces) {
+    for (const c of box.children) {
+      if (faces.some((f) => c.contains(f))) return null;
+      if (ourEl(c)) continue;
+      const t = labelText(c);
+      if (t) return { text: t, el: c };
+    }
+    return null;
+  }
+  // Textes (sans enfant) égaux à un titre reçu dans les réponses de la page.
+  const hintLeaves = (root) => [...root.querySelectorAll('*')].filter((e) => !e.children.length && tradeHints.has(simplify(e.textContent)));
+
+  function tradeCards() {
+    const out = [];
+    const faces = [];
+    const add = (face, title) => {
+      if (ourEl(face) || faces.some((f) => f.contains(face) || face.contains(f))) return;
+      faces.push(face);
+      const info = faceInfo(face, title);
+      if (!info.rarity) {
+        const g = face.querySelector('[class*="glow-"]');
+        const m = g && GLOW.exec(g.getAttribute('class') || '');
+        if (m) info.rarity = m[1].toUpperCase();
+      }
+      const hint = tradeHints.get(simplify(title));
+      if (!info.rarity && hint) info.rarity = hint.rarity;
+      if (!info.shiny && hint && hint.shiny) info.shiny = true;
+      out.push(info);
+    };
+    // 1. Même carte que dans la collection.
+    for (const face of document.querySelectorAll('div.rounded-2xl.overflow-hidden')) {
+      const h3 = face.querySelector('h3');
+      if (h3 && norm(h3.textContent)) add(face, norm(h3.textContent));
+    }
+    // 2. Classe glow-<rareté>.
+    for (const face of document.querySelectorAll('[class*="glow-"]')) {
+      if (!GLOW.test(face.getAttribute('class') || '')) continue;
+      const h = face.querySelector('h3, h4, h5');
+      if (h && norm(h.textContent)) add(face, norm(h.textContent));
+    }
+    // 3. Titres reçus dans les réponses de la page : la carte est le plus
+    // grand ancêtre (cardDepth niveaux, cardMaxPx de large au plus) qui ne
+    // contient que ce titre et pas de libellé de côté.
+    if (tradeHints.size) {
+      const main = document.querySelector('main') || document.body;
+      for (const el of hintLeaves(main)) {
+        if (ourEl(el) || faces.some((f) => f.contains(el))) continue;
+        let face = el;
+        for (let i = 0; i < CONFIG.trades.cardDepth; i++) {
+          const p = face.parentElement;
+          if (!p || p === main || p.getBoundingClientRect().width > CONFIG.trades.cardMaxPx) break;
+          if (hintLeaves(p).length > 1 || leadLabel(p, [face])) break;
+          face = p;
+        }
+        add(face, norm(el.textContent));
+      }
+    }
+    return out;
+  }
+
+  // Côtés : chaque carte remonte jusqu'au premier ancêtre qui contient une
+  // autre carte ou un libellé placé avant elle.
+  function tradeGroups(faces) {
+    const groups = new Map();
+    for (const face of faces) {
+      let w = face;
+      let box = null;
+      for (let i = 0; i < CONFIG.trades.groupDepth; i++) {
+        const p = w.parentElement;
+        if (!p || p === document.body || p === document.documentElement) break;
+        if (faces.some((f) => f !== face && p.contains(f)) || leadLabel(p, faces)) {
+          box = p;
+          break;
+        }
+        w = p;
+      }
+      box = box || w;
+      if (!groups.has(box)) groups.set(box, []);
+      groups.get(box).push(face);
+    }
+    return groups;
+  }
+  function groupLabel(box, faces) {
+    const own = leadLabel(box, faces);
+    if (own) return own;
+    for (let el = box, i = 0; el && i < 2; el = el.parentElement, i++) {
+      const prev = el.previousElementSibling;
+      if (prev && !ourEl(prev) && !faces.some((f) => prev.contains(f))) {
+        const t = labelText(prev);
+        if (t) return { text: t, el: prev };
+      }
+    }
+    return null;
+  }
+  // Deux côtés d'un même échange : le plus petit ancêtre commun ne contient
+  // qu'eux deux.
+  function tradePairs(boxes) {
+    const pairs = new Map();
+    for (const a of boxes) {
+      let p = a.parentElement;
+      while (p && p !== document.body && !boxes.some((b) => b !== a && p.contains(b))) p = p.parentElement;
+      if (!p || p === document.body) continue;
+      const inside = boxes.filter((b) => b !== a && p.contains(b));
+      if (inside.length === 1 && !inside[0].contains(a) && !a.contains(inside[0])) pairs.set(a, inside[0]);
+    }
+    for (const [a, b] of [...pairs]) if (pairs.get(b) !== a) pairs.delete(a);
+    return pairs;
+  }
+
+  const sumBadges = new Map(); // côté (élément) → { el, target }
+  // values : carte (élément) → { quick, median }, ou null si pas de prix.
+  function tradeTotals(values) {
+    const faces = [...values.keys()];
+    const totals = new Map();
+    for (const [box, list] of tradeGroups(faces)) {
+      if (list.length > CONFIG.trades.maxGroupCards) continue;
+      const lab = groupLabel(box, faces);
+      const t = { n: list.length, quick: 0, median: 0, missing: 0, label: lab && lab.text, labelEl: lab && lab.el, faces: list };
+      for (const f of list) {
+        const v = values.get(f);
+        if (v) {
+          t.quick += v.quick;
+          t.median += v.median;
+        } else t.missing++;
+      }
+      totals.set(box, t);
+    }
+    const pairs = tradePairs([...totals.keys()]);
+    const name = (x) => (x.label ? `« ${x.label.slice(0, CONFIG.trades.labelShown)} »` : 'Ce côté');
+    for (const [box, t] of totals) {
+      let b = sumBadges.get(box);
+      if (!b) {
+        b = { el: document.createElement('span'), target: box };
+        b.el.className = 'wv-b wv-sum';
+        badgeLayer.appendChild(b.el);
+        sumBadges.set(box, b);
+      }
+      const o = pairs.has(box) ? totals.get(pairs.get(box)) : null;
+      const diff = o ? t.quick - o.quick : null;
+      const text = `Σ ${t.missing ? '≥ ' : ''}${fmtPrice(t.quick)}${o && !t.missing && !o.missing ? ` (${fmtGain(diff)})` : ''}`;
+      const tip = `${name(t)} : ${t.n} carte${t.n > 1 ? 's' : ''}, ${fmtPrice(t.quick)} wikibidous en vente rapide, ${fmtPrice(t.median)} à la médiane`
+        + (t.missing ? `\n${t.missing} carte(s) sans prix, non comptée(s) : pas encore reconnue, trop peu de ventes ou lecture en cours.` : '')
+        + (o ? `\nAutre côté, ${name(o)} : ${o.missing ? '≥ ' : ''}${fmtPrice(o.quick)} en vente rapide, ${fmtPrice(o.median)} à la médiane.`
+          + `\nÉcart : ${fmtGain(diff)} en vente rapide, ${fmtGain(t.median - o.median)} à la médiane${t.missing || o.missing ? ' (incomplet)' : ''}.` : '');
+      b.labelEl = t.labelEl;
+      b.faces = t.faces;
+      b.el.style.setProperty('--wv-c', CONFIG.trades.sumColor);
+      if (b.el.textContent !== text) b.el.textContent = text;
+      b.el.title = tip;
+    }
+    for (const [box, b] of sumBadges) {
+      if (!totals.has(box)) {
+        b.el.remove();
+        sumBadges.delete(box);
+      }
+    }
+    placeSums();
+  }
+  function clearSums() {
+    sumBadges.forEach((b) => b.el.remove());
+    sumBadges.clear();
+  }
+  // Σ juste après le libellé du côté (« Tu donnes Σ 1 500 »), sinon
+  // au-dessus du coin haut droit de ses cartes.
+  function placeSums() {
+    for (const [box, b] of sumBadges) {
+      if (!box.isConnected) {
+        b.el.remove();
+        sumBadges.delete(box);
+        continue;
+      }
+      let r = null;
+      if (b.labelEl && b.labelEl.isConnected) {
+        const range = document.createRange();
+        range.selectNodeContents(b.labelEl);
+        const t = range.getBoundingClientRect();
+        if (t.width >= CONFIG.detect.minPx) r = { left: t.right + CONFIG.trades.sumGapPx, top: t.top + t.height / 2, bottom: t.bottom, mode: 'label' };
+      }
+      if (!r) {
+        const rects = (b.faces || []).filter((f) => f.isConnected).map((f) => f.getBoundingClientRect()).filter((x) => x.width >= CONFIG.detect.minPx);
+        if (rects.length) {
+          const top = Math.min(...rects.map((x) => x.top));
+          r = { left: Math.max(...rects.map((x) => x.right)), top: Math.max(CONFIG.trades.sumMinTopPx, top - CONFIG.trades.sumGapPx), bottom: Math.max(...rects.map((x) => x.bottom)), mode: 'cards' };
+        }
+      }
+      const out = !r || r.bottom < 0 || r.top > innerHeight;
+      b.el.style.display = out ? 'none' : '';
+      if (out) continue;
+      b.el.style.transform = r.mode === 'label' ? 'translate(0, -50%)' : 'translate(-100%, -100%)';
+      b.el.style.left = `${Math.round(r.left)}px`;
+      b.el.style.top = `${Math.round(r.top)}px`;
+    }
+  }
+  function tradeReport() {
+    const cards = tradeCards();
+    const faces = cards.map((c) => c.face);
+    const groups = faces.length ? tradeGroups(faces) : new Map();
+    return [
+      `Échanges : ${cards.length} carte(s) repérée(s), ${groups.size} côté(s), ${sumBadges.size} total(aux) affiché(s) · titres reçus dans les réponses : ${tradeHints.size}`,
+      ...cards.slice(0, 15).map((c) => `- ${c.title} (${c.rarity || '?'}${c.shiny ? ' ✦' : ''}) → ${gridCardId(c.title, c.shiny) || 'non reconnue'}`),
+      ...[...groups].slice(0, 8).map(([box, list]) => `  côté « ${(groupLabel(box, faces) || {}).text || '—'} » : ${list.length} carte(s)`),
+      'Réponses de la page sur /trades :',
+      ...(tradeShapes.length ? tradeShapes.map((s) => `  ${s}`) : ['  (aucune avec des cartes)']),
+      outline(document.querySelector('main') || document.body, 0).slice(0, CONFIG.trades.diagChars),
+    ].join('\n');
+  }
+
   function collectionTick() {
     // Fiche d'une carte ouverte par-dessus la grille : pastilles masquées.
     badgeLayer.style.display = state.view ? 'none' : '';
-    const profile = onProfile();
+    // Échanges : comme un profil (prix de vente rapide), plus les totaux.
+    const trades = onTrades();
+    const profile = onProfile() || trades;
     if (!location.pathname.startsWith('/collection') && !profile) {
       if (cardBadges.size) {
         cardBadges.forEach((b) => b.el.remove());
         cardBadges.clear();
       }
+      if (sumBadges.size) clearSums();
       return;
     }
     const ids = idsMem;
@@ -2734,23 +3042,27 @@
     const visible = [];
     const later = [];
     const refresh = [];
-    for (const { face, title, rarity, shiny } of gridCards()) {
+    const tradeValues = new Map(); // échanges : carte → { quick, median } ou null
+    for (const { face, title, rarity, shiny } of (trades ? tradeCards() : gridCards())) {
       const r = face.getBoundingClientRect();
       if (r.width < CONFIG.detect.minPx) continue;
       // Profil : seulement les vraies cartes (rareté lisible), pas les
       // autres encadrés de la page.
-      if (profile && !rarity) continue;
+      if (profile && !rarity && !trades) continue;
       seen.add(face);
+      if (trades) tradeValues.set(face, null);
       const cardId = gridCardId(title, shiny, ids);
-      const sum = cardId ? valueFor(cardId, rarity, shiny, CONFIG.collectionSummaryHours) : null;
-      if (cardId && !sum) (r.bottom > -CONFIG.ui.nearScreenPx && r.top < innerHeight + CONFIG.ui.nearScreenPx ? visible : later).push(cardId);
+      const sum = cardId && (rarity || !trades) ? valueFor(cardId, rarity, shiny, CONFIG.collectionSummaryHours) : null;
+      if (cardId && !sum && (rarity || !trades)) (r.bottom > -CONFIG.ui.nearScreenPx && r.top < innerHeight + CONFIG.ui.nearScreenPx ? visible : later).push(cardId);
       // Résumé ancien, ou d'avant la v0.14 (sans l'écart des 10 dernières ventes) : relu.
       else if (sum && (sum.stale || ((sum.span10 === undefined || sum.sales48 === undefined) && sum.median !== null))) refresh.push(cardId);
       let text;
       let bg;
       let tip;
       const head = `${title}${rarity ? ` (${rarity}${shiny ? ' ✦ shiny' : ''})` : ''}`;
-      if (!cardId) {
+      if (trades && !rarity) {
+        [text, bg, tip] = ['?', null, `${title} : rareté illisible, prix inconnu.`];
+      } else if (!cardId) {
         [text, bg, tip] = ['?', null, profile
           ? `${head} : carte pas encore reconnue. Elle le sera dès que tu la croiseras sur le marché ou dans ta collection.`
           : `${head} : carte pas encore reconnue. Elle le sera en ouvrant sa fiche une fois.`];
@@ -2767,6 +3079,7 @@
         tip = `${head} : vente rapide estimée à ${fmtPrice(quick)} wikibidous · normale ${fmtPrice(sum.normal)}`
           + `${sum.median != null ? ` · médiane ${fmtPrice(sum.median)}` : ''} (${thinText(sum.sales7, sum.span10)})`
           + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.');
+        if (trades) tradeValues.set(face, { quick, median: sum.median != null ? Math.round(sum.median) : quick });
       } else {
         const thin = isThin(sum.sales7, sum.span10);
         text = `${thin ? '💤 ' : isHot(sum.sales48) ? '🔥 ' : ''}${fmtPrice(sum.normal)}`;
@@ -2802,6 +3115,8 @@
       }
     }
     placeIn(cardBadges);
+    if (trades) tradeTotals(tradeValues);
+    else if (sumBadges.size) clearSums();
     pumpSales([...new Set([...visible, ...later, ...refresh, ...shinyFollowUps()])]);
   }
   // Identifiant d'une carte de la grille : titre shiny d'abord pour une carte shiny.
@@ -3822,6 +4137,7 @@
       `Achats connus : ${Object.keys(bought).length}${state.card ? ` · cette carte : ${state.purchase ? `${state.purchase.price} (${state.purchase.rarity || '?'})` : 'aucun'}` : ''}`
         + ` · fiche shiny : ${state.view ? state.shiny : '—'}`,
       shinyReport(),
+      onTrades() ? tradeReport() : '',
       (location.pathname.startsWith('/collection') || onProfile()) && !view
         ? gridCards().slice(0, 12).map((c) => `- ${c.title} (${c.rarity || '?'}) → ${knownId(c.title) || 'non reconnue'}`).join('\n')
           + '\n' + (gridCards()[0] ? outline(gridCards()[0].face.parentElement, 0).slice(0, 4000)
@@ -3877,6 +4193,7 @@
   const UUID_ONLY = new RegExp(`^${UUID}$`, 'i');
   onPageJson = (url, json) => {
     if (/\/api\/notifications\b/.test(url)) noteNotifications(json);
+    if (onTrades()) noteTradeJson(url, json);
     const pairs = [];
     let seen = 0;
     (function walk(obj, depth) {

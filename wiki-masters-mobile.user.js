@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.11.0
+// @version      1.12.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -434,7 +434,7 @@
       badgeTopPx: 6,
       nearScreenPx: 100,
     },
-    // Échanges (/trades) : prix de chaque carte et total de chaque côté.
+    // Échanges et amis (/trades, /friends) : prix de chaque carte et total de chaque côté.
     trades: {
       // Carte repérée par son titre : ancêtres examinés, largeur maximale (pixels).
       cardDepth: 4,
@@ -665,7 +665,7 @@
       'ui.badgeTopPx': 'Pastilles : décalage sous le haut de la carte (pixels)',
       'ui.nearScreenPx': 'Cartes lues d’abord : à l’écran ou à moins de (pixels)',
     }],
-    ['Échanges (/trades)', {
+    ['Échanges et amis (/trades, /friends)', {
       'trades.cardDepth': 'Carte repérée par son titre : ancêtres examinés',
       'trades.cardMaxPx': 'Carte repérée par son titre : largeur maximale (pixels)',
       'trades.groupDepth': 'Côté d’un échange : ancêtres examinés',
@@ -2762,20 +2762,21 @@
   // Échanges (/trades), aide v0.25.0 / téléphone v1.11.0 : prix de vente rapide
   // sur chaque carte (comme sur un profil) et total « Σ » de chaque côté d'un
   // échange, avec l'écart avec l'autre côté. Lecture seule : aucun clic.
+  // Aide v0.26.0 / téléphone v1.12.0 : aussi sur la page des amis (/friends).
   // ---------------------------------------------------------------------------
   // Balisage réel pas encore relevé. Cartes cherchées comme dans la collection
   // (div.rounded-2xl.overflow-hidden + h3), puis par la classe glow-<rareté>,
   // puis par les titres reçus dans les réponses de la page (/api/, /rest/v1/).
-  const onTrades = () => /^\/trades(\/|$)/.test(location.pathname);
+  const onTrades = () => /^\/(trades|friends)(\/|$)/.test(location.pathname);
   const tradeHints = new Map(); // titre simplifié → { title, rarity, shiny }
-  const tradeShapes = []; // forme des réponses lues sur /trades (diagnostic)
+  const tradeShapes = []; // forme des réponses lues sur /trades et /friends (diagnostic)
   const EN_RARITY = { legendary: 'L', ultra_rare: 'UR', super_rare: 'SR', rare: 'R', uncommon: 'PC', common: 'C' };
   function hintRarity(v) {
     if (typeof v !== 'string' || v.length > 20) return null;
     const up = norm(v).toUpperCase();
     return RARITIES.includes(up) ? up : rarityCode(v) || EN_RARITY[simplify(v).replace(/[ -]/g, '_')] || null;
   }
-  // Réponse de la page sur /trades : titres, rareté et version shiny des
+  // Réponse de la page (/trades, /friends) : titres, rareté et version shiny des
   // cartes (champ de la carte ou de l'objet qui la contient).
   function noteTradeJson(url, json) {
     let path = String(url);
@@ -2843,6 +2844,9 @@
       const hint = tradeHints.get(simplify(title));
       if (!info.rarity && hint) info.rarity = hint.rarity;
       if (!info.shiny && hint && hint.shiny) info.shiny = true;
+      // Ni rareté ni titre de carte connu : pas une carte (fiche d'un ami,
+      // pseudo en h3…).
+      if (!info.rarity && !hint && !gridCardId(title, false)) return;
       out.push(info);
     };
     // 1. Même carte que dans la collection.
@@ -3014,10 +3018,10 @@
     const faces = cards.map((c) => c.face);
     const groups = faces.length ? tradeGroups(faces) : new Map();
     return [
-      `Échanges : ${cards.length} carte(s) repérée(s), ${groups.size} côté(s), ${sumBadges.size} total(aux) affiché(s) · titres reçus dans les réponses : ${tradeHints.size}`,
+      `Échanges / amis : ${cards.length} carte(s) repérée(s), ${groups.size} côté(s), ${sumBadges.size} total(aux) affiché(s) · titres reçus dans les réponses : ${tradeHints.size}`,
       ...cards.slice(0, 15).map((c) => `- ${c.title} (${c.rarity || '?'}${c.shiny ? ' ✦' : ''}) → ${gridCardId(c.title, c.shiny) || 'non reconnue'}`),
       ...[...groups].slice(0, 8).map(([box, list]) => `  côté « ${(groupLabel(box, faces) || {}).text || '—'} » : ${list.length} carte(s)`),
-      'Réponses de la page sur /trades :',
+      `Réponses de la page sur ${location.pathname} :`,
       ...(tradeShapes.length ? tradeShapes.map((s) => `  ${s}`) : ['  (aucune avec des cartes)']),
       outline(document.querySelector('main') || document.body, 0).slice(0, CONFIG.trades.diagChars),
     ].join('\n');

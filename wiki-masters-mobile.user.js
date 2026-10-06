@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.12.0
+// @version      1.13.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -278,8 +278,9 @@
     buy: {
       // Mise max pour revendre (v0.23.0) = vente rapide − resaleGap : au moins
       // resaleGap wikibidous de gain en revendant au prix de vente rapide
-      // (300 = 1,5 étoile), comme le plafond « Revente » du bot de surenchère.
-      resaleGap: 300,
+      // (200 = 1 étoile depuis aide v0.27.0 / téléphone v1.13.0 ; 300 avant),
+      // comme le plafond « Revente » du bot de surenchère.
+      resaleGap: 200,
       // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
       // fois sur les stats.countDays derniers jours : son prix vient de
       // vieilles ventes (ex. Karl Marx L à 33 000).
@@ -583,7 +584,7 @@
       collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
     }],
     ['Aide à l’achat (marché)', {
-      'buy.resaleGap': 'Mise max pour revendre = vente rapide moins (wikibidous ; 300 = 1,5 étoile)',
+      'buy.resaleGap': 'Mise max pour revendre = vente rapide moins (wikibidous ; 200 = 1 étoile)',
       'buy.minRecentSales': 'Ni étoiles ni mise max sous (ventes sur la période 💤, 7 jours par défaut)',
       'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
       'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
@@ -835,7 +836,7 @@
   // rareté, même version). Sinon son prix vient de vieilles ventes : ni
   // étoiles ni mise max.
   const liquid = (sales7) => sales7 != null && sales7 >= CONFIG.buy.minRecentSales;
-  // Mise max pour revendre : vente rapide − resaleGap (300 = 1,5 étoile de
+  // Mise max pour revendre : vente rapide − resaleGap (200 = 1 étoile de
   // gain), jamais négative ; null si la carte ne se vend pas assez.
   const resaleCapOf = (quick, sales7) => (quick != null && liquid(sales7) ? Math.max(0, quick - CONFIG.buy.resaleGap) : null);
   // Carte peu vendue et peu chère : ne vaut pas une place sur le marché.
@@ -3396,7 +3397,7 @@
   // Données : la liste « Mes enchères » que la page du marché charge elle-même
   // (aucune requête en plus), relue ensuite toutes les 2 à 5 min tant que la
   // page est affichée ; plafonds calculés comme sur la tablette (revente = vente
-  // rapide − 300, collection = médiane ; rien sous 5 ventes en 7 jours).
+  // rapide − resaleGap, collection = médiane ; rien sous 5 ventes en 7 jours).
   const KEY_R_TOPIC = 'wr.topic';
   const KEY_R_MODES = 'wr.modes';
   const KEY_R_MODES_AT = 'wr.modesAt';

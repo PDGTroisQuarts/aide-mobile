@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.15.0
+// @version      1.16.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -240,11 +240,10 @@
     thinSales7d: 10,
     thinSpanDays: 0,
     // Carte à défausser (pastille violette, défausse signalée sur la fiche) :
-    // jamais 🔥 ; 💤 jusqu'à thinWorthlessMax compris ; sinon sous
-    // worthlessBelow ; toujours sans prix estimé (« – »). Avant : sous 30, ou 💤
-    // et sous 50.
-    worthlessBelow: 100,
-    thinWorthlessMax: 200,
+    // jamais 🔥 ; 💤 sous thinWorthlessBelow ; sinon sous worthlessBelow ;
+    // toujours sans prix estimé (« – »). v1.15.0 : 💤 jusqu'à 200, sinon sous 100.
+    worthlessBelow: 30,
+    thinWorthlessBelow: 100,
     // « Lancer plus tard » n'est proposé que pour un départ entre ces heures (Paris).
     wakeFromHour: 8,
     wakeToHour: 23,
@@ -581,8 +580,8 @@
       'stats.spanSales': '💤 : N (rang de la vente comparée)',
       hotSales48h: '🔥 « Se vend beaucoup » : au moins (ventes sur la période ci-dessous)',
       'stats.hotHours': '🔥 : période comptée (heures)',
-      worthlessBelow: 'À défausser (sans 🔥) : prix « Normal » sous (wikibidous)',
-      thinWorthlessMax: 'À défausser si 💤 : prix « Normal » jusqu’à (wikibidous, compris)',
+      worthlessBelow: 'À défausser (se vend normalement) : prix « Normal » sous (wikibidous)',
+      thinWorthlessBelow: 'À défausser si 💤 : prix « Normal » sous (wikibidous)',
       valueGreen: 'Pastille de la collection verte à partir de (wikibidous)',
       collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
     }],
@@ -855,7 +854,7 @@
   const isThin = (sales7, span10) => (sales7 != null && sales7 < CONFIG.thinSales7d)
     || (CONFIG.thinSpanDays > 0 && span10 !== undefined && (span10 === null || span10 > CONFIG.thinSpanDays));
   // Sans valeur : à défausser (fiche, nettoyage), pastille violette (sous UR).
-  const worthless = (normal, thin, hot = false) => !hot && (normal === null || normal < CONFIG.worthlessBelow || (thin && normal <= CONFIG.thinWorthlessMax));
+  const worthless = (normal, thin, hot = false) => !hot && (normal === null || normal < CONFIG.worthlessBelow || (thin && normal < CONFIG.thinWorthlessBelow));
   // Explication du 💤 (encarts, infobulles).
   const thinText = (sales7, span10) => `${sales7 ?? '?'} vente${sales7 > 1 ? 's' : ''} en ${CONFIG.stats.countDays} jours`
     + (CONFIG.thinSpanDays <= 0 ? '' : span10 === null ? `, moins de ${CONFIG.stats.spanSales} ventes en tout` : span10 !== undefined ? `, ${CONFIG.stats.spanSales} dernières ventes sur ${String(span10).replace('.', ',')} jours` : '');
@@ -2215,7 +2214,7 @@
         const thin = isThin(state.sales7, state.span10);
         if (advice.normal < CONFIG.worthlessBelow) {
           body += discardRow(`« Normal » à ${fmtPrice(advice.normal)} : moins de ${CONFIG.worthlessBelow} wikibidous`);
-        } else if (thin && advice.normal <= CONFIG.thinWorthlessMax) {
+        } else if (thin && advice.normal < CONFIG.thinWorthlessBelow) {
           body += discardRow(`💤 Se vend peu (${thinText(state.sales7, state.span10)}) pour ${fmtPrice(advice.normal)} wikibidous`);
         } else if (thin) {
           body += `<div class="wv-tip">💤 Se vend peu : ${esc(thinText(state.sales7, state.span10))}.</div>`;

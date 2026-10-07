@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Appareils Wiki Masters</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  /* Pupitre de contrôle : deux appareils côte à côte (empilés sur téléphone),
+     une ligne par bot, l'état en pastille à droite, l'action juste dessous. */
+  :root {
+    --bg: #eef1f4;
+    --panel: #ffffff;
+    --line: #d6dde4;
+    --ink: #17212b;
+    --muted: #5d6b78;
+    --accent: #0b6e78;
+    --accent-ink: #ffffff;
+    --on: #1f7a3f;
+    --on-bg: #e2f3e8;
+    --wait: #8a5300;
+    --wait-bg: #fdefd5;
+    --stop: #a3272f;
+    --stop-bg: #fbe3e4;
+    --off: #5d6b78;
+    --off-bg: #e9edf1;
+    --focus: #0b6e78;
+    --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f151b; --panel: #172029; --line: #2a3642; --ink: #e6edf3; --muted: #93a3b3;
+      --accent: #3fb6c2; --accent-ink: #0b1a1d;
+      --on: #6fd394; --on-bg: #163222; --wait: #f2b55e; --wait-bg: #3a2a10;
+      --stop: #f08a8f; --stop-bg: #3d1a1d; --off: #93a3b3; --off-bg: #222c36; --focus: #3fb6c2;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f151b; --panel: #172029; --line: #2a3642; --ink: #e6edf3; --muted: #93a3b3;
+    --accent: #3fb6c2; --accent-ink: #0b1a1d;
+    --on: #6fd394; --on-bg: #163222; --wait: #f2b55e; --wait-bg: #3a2a10;
+    --stop: #f08a8f; --stop-bg: #3d1a1d; --off: #93a3b3; --off-bg: #222c36; --focus: #3fb6c2;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.45 var(--font-ui);
+    padding-inline: 16px;
+    padding-block: calc(env(safe-area-inset-top, 0px) + 18px) calc(env(safe-area-inset-bottom, 0px) + 28px);
+  }
+  .wrap { max-width: 1040px; margin-inline: auto; display: grid; gap: 16px; }
+  header { display: grid; gap: 6px; }
+  .brand { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  h1 { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 700; text-wrap: balance; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--muted); font-size: 13px; }
+  .meta .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  .alert { border: 1px solid var(--stop); background: var(--stop-bg); color: var(--stop); border-radius: 10px; padding: 10px 12px; font-weight: 500; }
+  .devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px; align-items: start; }
+  .device { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; min-width: 0; }
+  .device.offline .bots { opacity: .62; }
+  .dhead { display: grid; gap: 4px; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+  .drow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .dname { margin: 0; font-size: 19px; font-weight: 700; }
+  .role { font-size: 13px; color: var(--muted); }
+  .role b { color: var(--ink); font-weight: 600; }
+  .seen { font-size: 13px; color: var(--muted); }
+  .bots { list-style: none; margin: 0; padding: 0; }
+  .bot { display: grid; gap: 6px; padding: 12px 16px; border-top: 1px solid var(--line); min-width: 0; }
+  .bot:first-child { border-top: 0; }
+  .bline { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .bname { font-weight: 600; }
+  .detail { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .detail .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .03em; white-space: nowrap; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.on { color: var(--on); background: var(--on-bg); }
+  .pill.wait { color: var(--wait); background: var(--wait-bg); }
+  .pill.stop { color: var(--stop); background: var(--stop-bg); }
+  .pill.off { color: var(--off); background: var(--off-bg); }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .btn { appearance: none; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font: 600 15px/1 var(--font-ui); padding: 12px 18px; min-height: 44px; cursor: pointer; }
+  .btn:disabled { background: var(--off-bg); color: var(--muted); cursor: default; }
+  .btn:focus-visible, .link:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  .empty { padding: 14px 16px; color: var(--muted); font-size: 14px; }
+  [hidden] { display: none !important; }
+  .setup { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 16px; display: grid; gap: 12px; max-width: 560px; }
+  .setup h2 { margin: 0; font-size: 18px; }
+  .setup p { margin: 0; color: var(--muted); max-width: 62ch; }
+  .field { display: flex; flex-wrap: wrap; gap: 10px; }
+  .field input { flex: 1 1 220px; min-width: 0; font: 500 16px/1.2 var(--font-num); padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .error { color: var(--stop); font-size: 14px; font-weight: 500; }
+  footer { color: var(--muted); font-size: 12px; }
+  @media (prefers-reduced-motion: no-preference) { .btn { transition: filter .15s; } .btn:not(:disabled):hover { filter: brightness(1.08); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">Wiki Masters</div>
+    <h1>Appareils</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+  <div id="alert" class="alert" role="status" hidden></div>
+  <section id="setup" class="setup" hidden>
+    <h2>Sujet ntfy</h2>
+    <p>Le tableau de bord lit l’état de tes appareils sur ntfy.sh. Entre le même sujet que sur la tablette et l’ordinateur : menu Tampermonkey, « Notification : Régler ».</p>
+    <form id="topic-form" class="field" novalidate>
+      <input id="topic-input" name="sujet" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="wikimasters-…" aria-label="Sujet ntfy">
+      <button class="btn" type="submit">Afficher</button>
+    </form>
+    <div id="topic-error" class="error" hidden></div>
+  </section>
+  <main id="devices" class="devices" aria-live="polite"></main>
+  <footer id="foot" hidden>L’appareil principal envoie son état toutes les 15 minutes, le relais toutes les 30 minutes, et chacun à chaque changement. Sans nouvelles de l’appareil principal depuis 30 minutes, le relais prend la main.</footer>
+</div>
+<script>
+(() => {
+  'use strict';
+  const NTFY = 'https://ntfy.sh';
+  const TOPIC_RE = /^[A-Za-z0-9_-]{1,64}$/;
+  // Hors ligne après deux états manqués (30 min au moins) et 2 min de marge.
+  const offlineMs = (st) => (Math.max(30, 2 * (Number(st.beat) || 15)) + 2) * 60000;
+  const RESEND_MS = 3 * 60000;
+  const DEVICES = [['tablette', 'Tablette'], ['ordinateur', 'Ordinateur']];
+  const BOTS = [['boosters', 'Bot booster'], ['surenchere', 'Bot surenchère'], ['achat', 'Bot achat légendaire'], ['vente', 'Bot vente automatique'], ['nettoyage', 'Bot nettoyage']];
+  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false };
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get() { try { return localStorage.getItem('wm.sujet') || ''; } catch (err) { return ''; } },
+    set(v) { try { if (v) localStorage.setItem('wm.sujet', v); else localStorage.removeItem('wm.sujet'); } catch (err) { /* stockage indisponible */ } },
+  };
+  const pad = (n) => String(n).padStart(2, '0');
+  const clock = (ts) => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  function left(ms) {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s >= 3600) return `${Math.floor(s / 3600)} h ${pad(Math.floor((s % 3600) / 60))}`;
+    return `${Math.floor(s / 60)}:${pad(s % 60)}`;
+  }
+  function ago(ts) {
+    const min = Math.floor((Date.now() - ts) / 60000);
+    if (min < 1) return 'à l’instant';
+    if (min < 60) return `il y a ${min} min`;
+    const h = Math.floor(min / 60);
+    return h < 24 ? `il y a ${h} h ${pad(min % 60)}` : `le ${new Date(ts).toLocaleDateString('fr-FR')} à ${clock(ts)}`;
+  }
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  };
+
+  // --- Relève des états (ntfy « <sujet>-statut ») ---------------------------
+  function takeStatus(m) {
+    if (!m || m.t !== 'statut' || !Number.isFinite(m.at) || !DEVICES.some(([d]) => d === m.d) || !m.bots || typeof m.bots !== 'object') return;
+    if (m.at > Date.now() + 5 * 60000) return;
+    const cur = state.devices[m.d];
+    if (!cur || cur.at < m.at) state.devices[m.d] = m;
+  }
+  async function poll() {
+    if (!state.topic || state.polling) return;
+    state.polling = true;
+    try {
+      const res = await fetch(`${NTFY}/${encodeURIComponent(state.topic)}-statut/json?poll=1&since=${encodeURIComponent(state.since)}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`réponse ${res.status}`);
+      const text = await res.text();
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue;
+        let ev = null;
+        try { ev = JSON.parse(line); } catch (err) { continue; }
+        if (!ev || ev.event !== 'message') continue;
+        if (ev.id) state.since = ev.id;
+        try { takeStatus(JSON.parse(ev.message)); } catch (err) { /* message étranger */ }
+      }
+      state.lastOk = Date.now();
+      state.error = '';
+    } catch (err) {
+      state.error = `ntfy.sh ne répond pas (${err.message}) : nouvel essai dans quelques secondes.`;
+    } finally {
+      state.polling = false;
+      render();
+    }
+  }
+  let timer = null;
+  function schedule() {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      await poll();
+      schedule();
+    }, document.visibilityState === 'visible' ? 15000 : 60000);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      poll();
+      schedule();
+    }
+  });
+
+  // --- « Relancer » (ntfy « <sujet>-commande ») -------------------------------
+  const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 14);
+  async function relaunch(d, bot, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Envoi…';
+    const message = JSON.stringify({ t: 'relancer', d, bot, at: Date.now(), id: randomId() });
+    try {
+      const res = await fetch(`${NTFY}/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: `${state.topic}-commande`, priority: 1, message }) });
+      if (!res.ok) throw new Error(`réponse ${res.status}`);
+      state.sent[`${d}|${bot}`] = Date.now();
+      state.error = '';
+    } catch (err) {
+      state.error = `Demande non envoyée : ntfy.sh ne répond pas (${err.message}). Réessaie.`;
+    }
+    render();
+  }
+
+  // --- Affichage ----------------------------------------------------------------
+  function botView(bot, b) {
+    const s = (b && b.s) || 'off';
+    const x = (b && b.x) || '';
+    if (bot === 'nettoyage') return s === 'off' ? { pill: 'off', label: 'OFF', text: x } : { pill: 'on', label: 'ON', text: '' };
+    switch (s) {
+      case 'on': return { pill: 'on', label: 'ON', text: x };
+      case 'antibot': return { pill: 'wait', label: 'Vérification', text: 'Vérification humaine demandée : actualisation automatique', until: b.r, relaunch: true };
+      case 'stopped': return b.r
+        ? { pill: 'stop', label: 'Arrêt', text: 'Arrêt de sécurité : reprise automatique', until: b.r, relaunch: true, note: x }
+        : { pill: 'stop', label: 'Arrêté', text: x || 'Arrêté' };
+      case 'human': return { pill: 'wait', label: 'À vérifier', text: 'Vérification humaine à faire sur l’appareil' };
+      case 'login': return { pill: 'wait', label: 'Connexion', text: 'Connexion requise sur l’appareil' };
+      default: return { pill: 'off', label: 'OFF', text: x };
+    }
+  }
+  function roleText(st, name) {
+    const other = name === 'Tablette' ? 'l’ordinateur' : 'la tablette';
+    const main = st.role === 'relais' ? (st.relais ? `Relais — a pris la main (${other} ne répond plus)` : 'Relais') : 'Principal';
+    const bid = st.ench === 'telecommande' ? (st.enchRelais ? `télécommande, mise à la place de ${other}` : 'télécommande') : 'mise';
+    return [main, `Surenchère : ${bid}`];
+  }
+  function deviceCard(d, name) {
+    const st = state.devices[d];
+    const card = el('article', 'device');
+    const head = el('div', 'dhead');
+    const row = el('div', 'drow');
+    row.append(el('h2', 'dname', name));
+    const online = st && Date.now() - st.at < offlineMs(st);
+    row.append(el('span', `pill ${online ? 'on' : 'off'}`, online ? 'En ligne' : 'Hors-ligne'));
+    head.append(row);
+    if (!st) {
+      head.append(el('div', 'seen', 'Aucun état reçu depuis 12 h.'));
+      card.append(head, el('div', 'empty', `Ouvre wiki-masters.com sur ${name === 'Tablette' ? 'la tablette' : 'l’ordinateur'}, avec le même sujet ntfy, et choisis « Appareil : ${name} » dans le menu Tampermonkey.`));
+      card.classList.add('offline');
+      return card;
+    }
+    if (!online) card.classList.add('offline');
+    const [main, bid] = roleText(st, name);
+    const role = el('div', 'role');
+    const strong = el('b', null, main);
+    role.append(strong, document.createTextNode(` · ${bid}`));
+    head.append(role, el('div', 'seen', `Dernier signe ${ago(st.at)} (${clock(st.at)})${online ? '' : ' · états au dernier signe'}${st.v ? ` · v${st.v}` : ''}`));
+    const list = el('ul', 'bots');
+    for (const [bot, label] of BOTS) {
+      const b = st.bots[bot];
+      const v = botView(bot, b);
+      const li = el('li', 'bot');
+      const line = el('div', 'bline');
+      line.append(el('span', 'bname', label), el('span', `pill ${v.pill}`, v.label));
+      li.append(line);
+      if (v.text || v.until) {
+        const det = el('div', 'detail');
+        det.append(document.createTextNode(v.text));
+        if (v.until) {
+          det.append(document.createTextNode(' dans '));
+          const n = el('span', 'num', left(v.until - Date.now()));
+          n.dataset.until = String(v.until);
+          det.append(n);
+        }
+        if (v.note) det.append(document.createTextNode(` — ${v.note}`));
+        li.append(det);
+      }
+      if (v.relaunch && online) {
+        const key = `${d}|${bot}`;
+        const sent = state.sent[key] && Date.now() - state.sent[key] < RESEND_MS;
+        const actions = el('div', 'actions');
+        const btn = el('button', 'btn', sent ? 'Demande envoyée' : 'Relancer');
+        btn.type = 'button';
+        btn.disabled = !!sent;
+        btn.setAttribute('aria-label', `Relancer ${label} sur ${name.toLowerCase()}`);
+        btn.addEventListener('click', () => relaunch(d, bot, btn));
+        actions.append(btn);
+        if (sent) actions.append(el('span', 'detail', 'L’appareil recharge la page à sa prochaine relève (1 min environ).'));
+        li.append(actions);
+      }
+      list.append(li);
+    }
+    card.append(head, list);
+    return card;
+  }
+  function render() {
+    const meta = $('meta');
+    meta.textContent = '';
+    if (state.topic) {
+      const last = el('span', null, 'Dernière relève : ');
+      last.append(el('span', 'num', state.lastOk ? new Date(state.lastOk).toLocaleTimeString('fr-FR') : '—'));
+      const change = el('button', 'link', 'Changer de sujet');
+      change.type = 'button';
+      change.addEventListener('click', () => showSetup(true));
+      const topicEl = el('span', null, 'Sujet : ');
+      topicEl.append(el('span', 'num', state.topic));
+      meta.append(last, topicEl, change);
+    }
+    $('alert').hidden = !state.error;
+    $('alert').textContent = state.error;
+    const box = $('devices');
+    box.textContent = '';
+    if (state.topic && $('setup').hidden) for (const [d, name] of DEVICES) box.append(deviceCard(d, name));
+    $('foot').hidden = !state.topic;
+  }
+  setInterval(() => {
+    for (const n of document.querySelectorAll('[data-until]')) {
+      const ms = Number(n.dataset.until) - Date.now();
+      n.textContent = ms > 0 ? left(ms) : '0:00 (imminente)';
+    }
+  }, 1000);
+
+  // --- Sujet ----------------------------------------------------------------------
+  function showSetup(on) {
+    $('setup').hidden = !on;
+    if (on) {
+      $('topic-input').value = state.topic;
+      $('topic-input').focus();
+    }
+    render();
+  }
+  function useTopic(t) {
+    state.topic = t;
+    state.since = '12h';
+    state.devices = {};
+    state.sent = {};
+    store.set(t);
+    showSetup(false);
+    poll();
+    schedule();
+  }
+  $('topic-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const t = $('topic-input').value.trim();
+    const err = $('topic-error');
+    if (!TOPIC_RE.test(t)) {
+      err.textContent = 'Sujet invalide : lettres, chiffres, « - » et « _ » seulement, sans espace (64 caractères au plus).';
+      err.hidden = false;
+      return;
+    }
+    err.hidden = true;
+    useTopic(t);
+  });
+  const fromHash = decodeURIComponent((location.hash || '').slice(1));
+  if (TOPIC_RE.test(fromHash)) {
+    store.set(fromHash);
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (err) { /* adresse inchangée */ }
+  }
+  const saved = TOPIC_RE.test(fromHash) ? fromHash : store.get();
+  if (TOPIC_RE.test(saved)) useTopic(saved);
+  else showSetup(true);
+
+  window.__tb = { state, poll };
+})();
+</script>
+</body>
+</html>

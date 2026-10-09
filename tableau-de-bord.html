@@ -132,7 +132,7 @@
   const offlineMs = (st) => (Math.max(30, 2 * (Number(st.beat) || 15)) + 2) * 60000;
   const RESEND_MS = 3 * 60000;
   const DEVICES = [['tablette', 'Tablette'], ['ordinateur', 'Ordinateur']];
-  const BOTS = [['boosters', 'Bot booster'], ['surenchere', 'Bot surenchère'], ['achat', 'Bot achat légendaire'], ['vente', 'Bot vente automatique'], ['nettoyage', 'Bot nettoyage']];
+  const BOTS = [['boosters', 'Bot booster'], ['surenchere', 'Bot surenchère'], ['achat', 'Bot achat légendaire'], ['outerwilds', 'Bot achat Outer Wilds'], ['vente', 'Bot vente automatique'], ['nettoyage', 'Bot nettoyage']];
   const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false };
   const $ = (id) => document.getElementById(id);
   const store = {

@@ -133,6 +133,19 @@
   const RESEND_MS = 3 * 60000;
   const DEVICES = [['tablette', 'Tablette'], ['ordinateur', 'Ordinateur']];
   const BOTS = [['boosters', 'Bot booster'], ['surenchere', 'Bot surenchère'], ['achat', 'Bot bonnes affaires'], ['shopping', 'Bot shopping'], ['vente', 'Bot vente automatique'], ['nettoyage', 'Bot nettoyage']];
+  // Révision de cette page : l'appareil en attend une plus récente (champ
+  // « tb » de son état) → page gardée en cache par le navigateur
+  // (avertissement). À monter avec CONFIG.devices.dashboardRev du script.
+  const PAGE_REV = 2;
+  // Bots de l'état reçu : ceux de la page, puis ceux qu'elle ne connaît pas
+  // encore (bot plus récent que la page) ; ancien nom du shopping (v1.7).
+  function botsOf(st) {
+    const bots = { ...st.bots };
+    if (bots.outerwilds && !bots.shopping) bots.shopping = bots.outerwilds;
+    delete bots.outerwilds;
+    const known = new Set(BOTS.map(([b]) => b));
+    return [...BOTS.map(([b, label]) => [b, label, bots[b]]), ...Object.keys(bots).filter((b) => !known.has(b)).map((b) => [b, `Bot ${b}`, bots[b]])];
+  }
   const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false };
   const $ = (id) => document.getElementById(id);
   const store = {
@@ -234,7 +247,9 @@
       case 'stopped': return b.r
         ? { pill: 'stop', label: 'Arrêt', text: 'Arrêt de sécurité : reprise automatique', until: b.r, relaunch: true, note: x }
         : { pill: 'stop', label: 'Arrêté', text: x || 'Arrêté' };
-      case 'human': return { pill: 'wait', label: 'À vérifier', text: 'Vérification humaine à faire sur l’appareil' };
+      case 'human': return /rapide/i.test(x)
+        ? { pill: 'wait', label: 'Vérification', text: 'Vérification rapide du site en cours : elle se fait seule' }
+        : { pill: 'wait', label: 'À vérifier', text: 'Case à cocher : coche-la (depuis n’importe quel appareil) ; page rechargée toutes les 30 s' };
       case 'login': return { pill: 'wait', label: 'Connexion', text: 'Connexion requise sur l’appareil' };
       default: return { pill: 'off', label: 'OFF', text: x };
     }
@@ -266,9 +281,9 @@
     const strong = el('b', null, main);
     role.append(strong, document.createTextNode(` · ${bid}`));
     head.append(role, el('div', 'seen', `Dernier signe ${ago(st.at)} (${clock(st.at)})${online ? '' : ' · états au dernier signe'}${st.v ? ` · v${st.v}` : ''}`));
+    if (Number(st.tb) > PAGE_REV) head.append(el('div', 'seen', `Cette page est plus ancienne que le bot (v${st.v || '?'}) : recharge-la (une nouvelle version peut mettre quelques minutes à arriver).`));
     const list = el('ul', 'bots');
-    for (const [bot, label] of BOTS) {
-      const b = st.bots[bot];
+    for (const [bot, label, b] of botsOf(st)) {
       const v = botView(bot, b);
       const li = el('li', 'bot');
       const line = el('div', 'bline');

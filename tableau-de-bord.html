@@ -100,6 +100,17 @@
   .field input { flex: 1 1 220px; min-width: 0; font: 500 16px/1.2 var(--font-num); padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
   .error { color: var(--stop); font-size: 14px; font-weight: 500; }
   footer { color: var(--muted); font-size: 12px; }
+  /* Liste de shopping (v1.8.6) : une ligne par carte, retrait à droite ; ajout en bas. */
+  .shop { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; min-width: 0; }
+  .shop .items { list-style: none; margin: 0; padding: 0; }
+  .shop .item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); min-width: 0; }
+  .shop .item:first-child { border-top: 0; }
+  .shop .iname { font-weight: 600; overflow-wrap: anywhere; }
+  .shop .add { display: grid; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--line); }
+  .shop .add .row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .shop .add input, .shop .add select { font: 500 16px/1.2 var(--font-ui); padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-height: 44px; }
+  .shop .add input { flex: 1 1 220px; min-width: 0; }
+  .btn.ghost { background: var(--off-bg); color: var(--ink); padding: 10px 14px; min-height: 40px; }
   @media (prefers-reduced-motion: no-preference) { .btn { transition: filter .15s; } .btn:not(:disabled):hover { filter: brightness(1.08); } }
 </style>
 </head>
@@ -121,6 +132,7 @@
     <div id="topic-error" class="error" hidden></div>
   </section>
   <main id="devices" class="devices" aria-live="polite"></main>
+  <section id="shop" class="shop" hidden aria-live="polite"></section>
   <footer id="foot" hidden>L’appareil principal envoie son état toutes les 15 minutes, le relais toutes les 30 minutes, et chacun à chaque changement. Sans nouvelles de l’appareil principal depuis 30 minutes, le relais prend la main.</footer>
 </div>
 <script>
@@ -136,7 +148,8 @@
   // Révision de cette page : l'appareil en attend une plus récente (champ
   // « tb » de son état) → page gardée en cache par le navigateur
   // (avertissement). À monter avec CONFIG.devices.dashboardRev du script.
-  const PAGE_REV = 3;
+  const PAGE_REV = 4;
+  const RARITIES = ['L', 'UR', 'SR', 'R', 'PC', 'C'];
   // Bots de l'état reçu : ceux de la page, puis ceux qu'elle ne connaît pas
   // encore (bot plus récent que la page) ; ancien nom du shopping (v1.7).
   function botsOf(st) {
@@ -146,7 +159,7 @@
     const known = new Set(BOTS.map(([b]) => b));
     return [...BOTS.map(([b, label]) => [b, label, bots[b]]), ...Object.keys(bots).filter((b) => !known.has(b)).map((b) => [b, `Bot ${b}`, bots[b]])];
   }
-  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false };
+  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false, shopSent: {}, shopNote: '' };
   const $ = (id) => document.getElementById(id);
   const store = {
     get() { try { return localStorage.getItem('wm.sujet') || ''; } catch (err) { return ''; } },
@@ -221,13 +234,16 @@
 
   // --- « Relancer » (ntfy « <sujet>-commande ») -------------------------------
   const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 14);
+  async function sendCommand(cmd) {
+    const message = JSON.stringify({ ...cmd, at: Date.now(), id: randomId() });
+    const res = await fetch(`${NTFY}/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: `${state.topic}-commande`, priority: 1, message }) });
+    if (!res.ok) throw new Error(`réponse ${res.status}`);
+  }
   async function relaunch(d, bot, btn) {
     btn.disabled = true;
     btn.textContent = 'Envoi…';
-    const message = JSON.stringify({ t: 'relancer', d, bot, at: Date.now(), id: randomId() });
     try {
-      const res = await fetch(`${NTFY}/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: `${state.topic}-commande`, priority: 1, message }) });
-      if (!res.ok) throw new Error(`réponse ${res.status}`);
+      await sendCommand({ t: 'relancer', d, bot });
       state.sent[`${d}|${bot}`] = Date.now();
       state.error = '';
     } catch (err) {
@@ -321,6 +337,100 @@
     card.append(head, list);
     return card;
   }
+  // --- Shopping (liste de souhaits du bot, v1.8.6) -------------------------------
+  // Liste lue dans l'état de l'appareil où tourne le shopping (sinon le plus
+  // récent qui en a une) ; ajout et retrait envoyés à cet appareil (« * » : les
+  // deux) par « <sujet>-commande », appliqués à sa prochaine relève (~1 min).
+  function shopSource() {
+    const have = DEVICES.map(([d, name]) => [d, name, state.devices[d]]).filter(([, , st]) => st && Array.isArray(st.shop));
+    const on = have.find(([, , st]) => st.bots && st.bots.shopping && st.bots.shopping.s && st.bots.shopping.s !== 'off');
+    const pick = on || have.sort((a, b) => b[2].at - a[2].at)[0];
+    // Ajout : à l'appareil du bot, sinon aux deux ; retrait : à l'appareil de
+    // la liste (numéros propres à chaque appareil).
+    return pick ? { d: on ? pick[0] : '*', dev: pick[0], name: pick[1], st: pick[2], running: !!on } : null;
+  }
+  // Saisie finie : le champ lâche le focus pour que la liste se redessine.
+  const unfocus = () => { const a = document.activeElement; if (a && $('shop').contains(a) && a.blur) a.blur(); };
+  async function shopSend(cmd, key, btn) {
+    if (btn) btn.disabled = true;
+    unfocus();
+    try {
+      await sendCommand({ t: 'shop', ...cmd });
+      state.shopSent[key] = Date.now();
+      state.shopNote = 'Demande envoyée : l’appareil l’applique à sa prochaine relève (1 min environ), puis la liste se met à jour ici.';
+      state.error = '';
+    } catch (err) {
+      state.error = `Demande non envoyée : ntfy.sh ne répond pas (${err.message}). Réessaie.`;
+    }
+    render();
+  }
+  function shopCard() {
+    const src = shopSource();
+    const box = $('shop');
+    box.textContent = '';
+    box.hidden = !src;
+    if (!src) return;
+    const head = el('div', 'dhead');
+    const row = el('div', 'drow');
+    row.append(el('h2', 'dname', 'Shopping'), el('span', `pill ${src.running ? 'on' : 'off'}`, src.running ? `Actif : ${src.name.toLowerCase()}` : 'Bot OFF'));
+    head.append(row, el('div', 'seen', `Liste de souhaits de ${src.name === 'Tablette' ? 'la tablette' : 'l’ordinateur'} (état ${ago(src.st.at)})${src.running ? '' : ' · le bot shopping ne tourne sur aucun appareil'}`));
+    const list = el('ul', 'items');
+    for (const [id, name, rarity, mode, end] of src.st.shop) {
+      const li = el('li', 'item');
+      const info = el('div');
+      info.append(el('div', 'iname', name), el('div', 'detail', `${rarity || 'toutes raretés'} · ${mode === 'loop' ? 'en continu' : 'x1'}${end ? ` · misée, fin à ${clock(end)}` : ''}`));
+      const asked = state.shopSent[`del|${id}`] && Date.now() - state.shopSent[`del|${id}`] < RESEND_MS;
+      const btn = el('button', 'btn ghost', asked ? 'Retrait demandé' : 'Retirer');
+      btn.type = 'button';
+      btn.disabled = !!asked;
+      btn.setAttribute('aria-label', `Retirer ${name} de la liste de shopping`);
+      btn.addEventListener('click', () => shopSend({ op: 'del', d: src.dev, i: id }, `del|${id}`, btn));
+      li.append(info, btn);
+      list.append(li);
+    }
+    if (!src.st.shop.length) list.append(el('li', 'empty', 'Liste vide.'));
+    const form = el('form', 'add');
+    form.noValidate = true;
+    const r1 = el('div', 'row');
+    const name = el('input');
+    name.name = 'carte';
+    name.placeholder = 'Nom exact de la carte';
+    name.setAttribute('aria-label', 'Nom exact de la carte');
+    name.autocomplete = 'off';
+    r1.append(name);
+    const r2 = el('div', 'row');
+    const rar = el('select');
+    rar.setAttribute('aria-label', 'Rareté');
+    for (const [v, label] of [['', 'Toutes raretés'], ...RARITIES.map((x) => [x, x])]) {
+      const o = el('option', null, label);
+      o.value = v;
+      rar.append(o);
+    }
+    const qty = el('select');
+    qty.setAttribute('aria-label', 'Combien');
+    for (const [v, label] of [['one', 'x1 (retirée une fois gagnée)'], ['loop', 'En continu']]) {
+      const o = el('option', null, label);
+      o.value = v;
+      qty.append(o);
+    }
+    const add = el('button', 'btn', 'Ajouter');
+    add.type = 'submit';
+    r2.append(rar, qty, add);
+    form.append(r1, r2);
+    if (state.shopNote) form.append(el('div', 'detail', state.shopNote));
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const n = name.value.trim().slice(0, 80);
+      if (!n) {
+        state.shopNote = 'Écris le nom exact de la carte.';
+        unfocus();
+        render();
+        return;
+      }
+      shopSend({ op: 'add', d: src.d, n, r: rar.value, m: qty.value }, `add|${n}`, add);
+    });
+    box.append(head, list, form);
+  }
   function render() {
     const meta = $('meta');
     meta.textContent = '';
@@ -339,6 +449,11 @@
     const box = $('devices');
     box.textContent = '';
     if (state.topic && $('setup').hidden) for (const [d, name] of DEVICES) box.append(deviceCard(d, name));
+    // Formulaire en cours de saisie : jamais redessiné sous les doigts.
+    const typing = document.activeElement && $('shop').contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
+    if (state.topic && $('setup').hidden) {
+      if (!typing) shopCard();
+    } else $('shop').hidden = true;
     $('foot').hidden = !state.topic;
   }
   setInterval(() => {

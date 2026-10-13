@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.16.0
+// @version      1.17.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -280,9 +280,10 @@
     buy: {
       // Mise max pour revendre (v0.23.0) = vente rapide − resaleGap : au moins
       // resaleGap wikibidous de gain en revendant au prix de vente rapide
-      // (300 = 1,5 étoile ; 200 en aide v0.27.0 / téléphone v1.13.0, revenu à
-      // 300 ensuite), comme le plafond « Revente » du bot de surenchère.
-      resaleGap: 300,
+      // (400 = 2 étoiles depuis la v1.17.0, comme le bot de l'ordinateur ; 300
+      // avant, 200 en téléphone v1.13.0), comme le plafond « Revente » du bot
+      // de surenchère.
+      resaleGap: 400,
       // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
       // fois sur les stats.countDays derniers jours : son prix vient de
       // vieilles ventes (ex. Karl Marx L à 33 000).
@@ -300,10 +301,11 @@
       summaryHours: 6,
       // Étoiles des pastilles (v0.21.0) : gain théorique si la carte est
       // achetée maintenant puis revendue (prix de revente − mise). Une
-      // demi-étoile par starStep wikibidous, starMax étoiles au plus (600 et
-      // plus) ; rouge franc à 0 étoile, vert franc au maximum.
+      // demi-étoile par starStep wikibidous, starMax étoiles au plus (1 000 et
+      // plus ; 5 depuis la v1.17.0, comme le bot de l'ordinateur, 3 avant) ;
+      // rouge franc à 0 étoile, vert franc au maximum.
       starStep: 100,
-      starMax: 3,
+      starMax: 5,
       // Perte (aide v0.24.0 ; téléphone v1.10.0) : sous 0 étoile (mise au-dessus du
       // prix de revente), pastille en pourcentage négatif : perte / prix de
       // revente. Rouge de plus en plus sombre jusqu'à −lossDarkPct %.
@@ -586,7 +588,7 @@
       collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
     }],
     ['Aide à l’achat (marché)', {
-      'buy.resaleGap': 'Mise max pour revendre = vente rapide moins (wikibidous ; 300 = 1,5 étoile)',
+      'buy.resaleGap': 'Mise max pour revendre = vente rapide moins (wikibidous ; 400 = 2 étoiles)',
       'buy.minRecentSales': 'Ni étoiles ni mise max sous (ventes sur la période 💤, 7 jours par défaut)',
       'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
       'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
@@ -738,6 +740,19 @@
       'tech.dupCheckMs': 'Recherche de copies du script en double après (ms)',
     }],
   ];
+  // v1.17.0 : anciennes valeurs par défaut gardées dans les réglages (3 étoiles
+  // au plus, revente − 300) remplacées par les nouvelles (5 étoiles, − 400).
+  try {
+    const old = GM_getValue('wvm.settings', null);
+    if (old && typeof old === 'object' && !GM_getValue('wvm.migr117', false)) {
+      if (old['buy.starMax'] === 3) delete old['buy.starMax'];
+      if (old['buy.resaleGap'] === 300) delete old['buy.resaleGap'];
+      GM_setValue('wvm.settings', old);
+    }
+    GM_setValue('wvm.migr117', true);
+  } catch (err) {
+    // réglages illisibles : laissés tels quels
+  }
   const settings = makeSettings(CONFIG, HELP, 'wvm.settings', 'Aide mobile');
   requestTimeoutMs = CONFIG.read.timeoutMs;
 
@@ -838,7 +853,7 @@
   // rareté, même version). Sinon son prix vient de vieilles ventes : ni
   // étoiles ni mise max.
   const liquid = (sales7) => sales7 != null && sales7 >= CONFIG.buy.minRecentSales;
-  // Mise max pour revendre : vente rapide − resaleGap (300 = 1,5 étoile de
+  // Mise max pour revendre : vente rapide − resaleGap (400 = 2 étoiles de
   // gain), jamais négative ; null si la carte ne se vend pas assez.
   const resaleCapOf = (quick, sales7) => (quick != null && liquid(sales7) ? Math.max(0, quick - CONFIG.buy.resaleGap) : null);
   // Carte peu vendue et peu chère : ne vaut pas une place sur le marché.
@@ -2072,6 +2087,9 @@
       border-radius: 50%; animation: wv-spin .8s linear infinite; }
     @keyframes wv-spin { to { transform: rotate(360deg); } }
     #wv-panel .wv-gear-row { justify-content: flex-end; }
+    #wv-panel .wv-shop-row { flex-wrap: wrap; }
+    #wv-panel .wv-shop-row button { border: 0; border-radius: 8px; min-height: 34px; padding: 0 12px; font: inherit; font-size: 12px;
+      background: rgba(255,255,255,.08); color: #e4e4e7; }
     #wv-panel button.wv-gear { border: 0; border-radius: 8px; min-height: 32px; padding: 0 12px; font: inherit; font-size: 12px;
       background: rgba(255,255,255,.08); color: #e4e4e7; }
   `;
@@ -2099,6 +2117,11 @@
       GM_setValue(KEY_MINIMIZED, min);
       remote.touchedAt = 0; // redessin immédiat (flèche ▴ / ▾)
       render();
+      return;
+    }
+    const sb = e.target.closest('button[data-shop]');
+    if (sb) {
+      shopAsk(sb.dataset.title, sb.dataset.rarity || '', sb.dataset.shop);
       return;
     }
     const rb = e.target.closest('button[data-rmode]');
@@ -2226,6 +2249,7 @@
       }
     }
     body += purchaseLine();
+    if (card) body += shopRow(card.data.wikipedia_title, state.rarity);
     panel.dataset.mode = 'sale';
     // Ligne réduite : vente rapide et normale (ou l'état de la recherche).
     const summary = !advice ? '<i>…</i>'
@@ -3379,6 +3403,7 @@
       body += `<div class="wv-status">Ventes (${esc(adv.period)}) : ${fmtPrice(adv.min)} – ${fmtPrice(adv.max)}, médiane ${fmtPrice(adv.median)}`
         + `${pr.quick != null ? ` · vente rapide ${fmtPrice(pr.quick)}, normale ${fmtPrice(pr.normal)}` : ''}</div>`;
     }
+    if (a && (buy.title || a.title)) body += shopRow(buy.title || a.title, a.rarity);
     // Ligne réduite : écart de la prochaine mise et verdict (✅ 👍 ⛔…).
     const summary = !adv ? '<i>…</i>' : !adv.enough ? '<i>trop peu de ventes</i>' : buy.summary || '';
     const html = `<header><span class="wv-title">${title}</span>${pill}<span class="wv-sum">${summary}</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
@@ -3511,6 +3536,38 @@
   // Priorité 1 : message de service, jamais affiché ni sonné sur le téléphone.
   const rPublish = (id, mode) => rSyncTopic() && ntfyRequest('POST', 'https://ntfy.sh/',
     JSON.stringify({ topic: rSyncTopic(), message: JSON.stringify({ t: 'mode', id, mode, at: Date.now() }), priority: CONFIG.remote.modePriority }));
+  // Shopping à distance (v1.17.0, bot de l'ordinateur v1.8.6) : la carte de
+  // la fiche ou de l'enchère est ajoutée à la liste de souhaits du bot
+  // shopping par « <sujet>-commande » (même sujet que la télécommande), pour
+  // les deux appareils (« * ») ; l'appareil l'ajoute à sa prochaine relève
+  // (1 min environ). Liste complète, retraits : tableau de bord (menu).
+  const shopState = { key: '', at: 0, ok: false };
+  function shopRow(title, rarity) {
+    if (!title) return '';
+    const r = rarity || '';
+    const key = `${simplify(title)}|${r}`;
+    const sent = shopState.key === key && Date.now() - shopState.at < 10 * 60000;
+    const note = !sent ? '' : shopState.ok ? 'demande envoyée : ajoutée à la liste du bot dans 1 min environ'
+      : 'demande non envoyée (ntfy.sh ne répond pas) : réessaie';
+    const b = (mode, label) => `<button type="button" data-shop="${mode}" data-title="${esc(title)}" data-rarity="${esc(r)}">${label}</button>`;
+    return `<div class="wv-status wv-shop-row"><span>🛒 Shopping${r ? ` (${esc(r)})` : ''} :</span>${b('one', 'x1')}${b('loop', 'En continu')}${note ? `<span>${esc(note)}</span>` : ''}</div>`;
+  }
+  async function shopAsk(title, rarity, mode) {
+    if (!rTopic()) {
+      alert('Shopping : il faut d’abord le sujet ntfy de l’ordinateur (le même que sur la tablette et l’ordinateur).');
+      remoteSetup();
+      if (!rTopic()) return;
+    }
+    const what = `« ${title} »${rarity ? ` (${rarity})` : ' (toutes raretés)'} ${mode === 'loop' ? 'en continu' : 'une fois (x1)'}`;
+    if (!confirm(`Ajouter ${what} à la liste du bot shopping ?\n\nLe bot misera sous la médiane, sans prix maximum (solde gardé au-dessus de 10 000).`)) return;
+    const id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+    const message = JSON.stringify({ t: 'shop', op: 'add', d: '*', n: String(title).slice(0, 80), r: rarity || '', m: mode === 'loop' ? 'loop' : 'one', at: Date.now(), id });
+    const res = await ntfyRequest('POST', 'https://ntfy.sh/', JSON.stringify({ topic: `${rTopic()}-commande`, message, priority: 1 }));
+    Object.assign(shopState, { key: `${simplify(title)}|${rarity || ''}`, at: Date.now(), ok: res !== null });
+    lastBuyHtml = '';
+    remote.touchedAt = 0;
+    render();
+  }
   async function rPullModes() {
     if (!rSyncTopic() || remote.syncing || Date.now() < remote.nextSync) return;
     remote.syncing = true;
@@ -3688,6 +3745,11 @@
     panel.addEventListener(type, () => { remote.touchedAt = Date.now(); }, { passive: true, capture: true });
   }
 
+  // Tableau de bord (état des bots, liste de shopping : ajout et retrait).
+  GM_registerMenuCommand('Tableau de bord (bots, liste de shopping)', () => {
+    const t = rTopic();
+    window.open(`https://raw.githack.com/PDGTroisQuarts/aide-mobile/main/tableau-de-bord.html${t ? `#${encodeURIComponent(t)}` : ''}`, '_blank', 'noopener');
+  });
   GM_registerMenuCommand(`Télécommande des enchères : ${rTopic() ? 'régler' : 'activer'}`, () => {
     remoteSetup();
     alert(rTopic() ? `Télécommande activée (sujet ${rTopic()}). Elle s’affiche sur la page du marché.` : 'Télécommande désactivée.');

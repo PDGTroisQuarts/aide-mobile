@@ -136,7 +136,7 @@
   // Révision de cette page : l'appareil en attend une plus récente (champ
   // « tb » de son état) → page gardée en cache par le navigateur
   // (avertissement). À monter avec CONFIG.devices.dashboardRev du script.
-  const PAGE_REV = 2;
+  const PAGE_REV = 3;
   // Bots de l'état reçu : ceux de la page, puis ceux qu'elle ne connaît pas
   // encore (bot plus récent que la page) ; ancien nom du shopping (v1.7).
   function botsOf(st) {
@@ -243,7 +243,7 @@
     if (bot === 'nettoyage') return s === 'off' ? { pill: 'off', label: 'OFF', text: x } : { pill: 'on', label: 'ON', text: '' };
     switch (s) {
       case 'on': return { pill: 'on', label: 'ON', text: x };
-      case 'antibot': return { pill: 'wait', label: 'Vérification', text: 'Vérification humaine demandée : actualisation automatique', until: b.r, relaunch: true };
+      case 'antibot': return { pill: 'wait', label: 'Anti-bot', text: 'Refus anti-bot du site : nouvel essai automatique', until: b.r, relaunch: true };
       case 'stopped': return b.r
         ? { pill: 'stop', label: 'Arrêt', text: 'Arrêt de sécurité : reprise automatique', until: b.r, relaunch: true, note: x }
         : { pill: 'stop', label: 'Arrêté', text: x || 'Arrêté' };
@@ -296,6 +296,8 @@
           det.append(document.createTextNode(' dans '));
           const n = el('span', 'num', left(v.until - Date.now()));
           n.dataset.until = String(v.until);
+          // État reçu avant l'échéance, appareil en ligne : « sans doute repris ».
+          n.dataset.stale = online && st.at < v.until ? '1' : '';
           det.append(n);
         }
         if (v.note) det.append(document.createTextNode(` — ${v.note}`));
@@ -342,7 +344,9 @@
   setInterval(() => {
     for (const n of document.querySelectorAll('[data-until]')) {
       const ms = Number(n.dataset.until) - Date.now();
-      n.textContent = ms > 0 ? left(ms) : '0:00 (imminente)';
+      // Échéance passée depuis plus de 2 min : le bot a sans doute repris,
+      // l'appareil n'a pas encore envoyé son nouvel état.
+      n.textContent = ms > 0 ? left(ms) : ms > -120000 || !n.dataset.stale ? '0:00 (imminente)' : `0:00 (prévue à ${clock(Number(n.dataset.until))} : le bot a sans doute repris, état pas encore reçu)`;
     }
   }, 1000);
 

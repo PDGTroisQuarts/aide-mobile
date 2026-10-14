@@ -9,6 +9,9 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.18.0** (14/10) : sur « Toutes les cartes » (global-collection), la fiche
+ouverte propose aussi **🛒 Shopping : x1 / En continu**.
+
 **v1.17.0** (13/10) : étoiles jusqu'à 5 (une demi-étoile par 100 wikibidous de
 gain, comme sur l'ordinateur), mise max pour revendre = vente rapide − 400
 (2 étoiles), bouton **🛒 Shopping : x1 / En continu** sur la fiche d'une carte

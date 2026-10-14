@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.17.0
+// @version      1.18.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -2203,6 +2203,7 @@
     const { advice, timing, card, view } = state;
     if (!view) {
       if (buy) return renderBuy();
+      if (globalCard && location.pathname.startsWith('/global-collection')) return renderGlobal();
       if (remoteShown()) return renderRemote();
       panel.style.display = 'none';
       return;
@@ -2264,8 +2265,29 @@
   // ---------------------------------------------------------------------------
 
   let busy = false;
+  // « Toutes les cartes » (v1.18.0, demande du 14/10) : fiche ouverte → commande
+  // du shopping (x1 ou en continu) pour le bot de l'ordinateur, sur tous les appareils.
+  let globalCard = null;
+  function renderGlobal() {
+    const g = globalCard;
+    const pill = g.rarity ? `<span class="wv-pill">${esc(g.rarity)}${g.shiny ? ' ✦' : ''}</span>` : '';
+    panel.style.display = 'block';
+    panel.dataset.mode = 'global';
+    panel.innerHTML = `<header><span class="wv-title">${esc(g.title)}</span>${pill}<span class="wv-sum">🛒</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
+      + `<div class="wv-body"><div class="wv-status">Shopping : mise sous la médiane, sans prix maximum ; ajoutée sur tous les appareils.</div>${shopRow(g.title, g.rarity)}${gearRow}</div>`;
+  }
   async function tick() {
     if (busy || document.hidden) return;
+    if (location.pathname.startsWith('/global-collection')) {
+      const v = cardView();
+      const g = v ? { title: cardTitles(v.container)[0] || '', rarity: cardRarity(v.container), shiny: sheetShiny(v.container) } : null;
+      globalCard = g && g.title ? g : null;
+      state.view = null;
+      state.key = null;
+      render();
+      return;
+    }
+    globalCard = null;
     const view = location.pathname.startsWith('/collection') ? cardView() : null;
     // Clé = titre + rareté : deux exemplaires d'une même carte de raretés
     // différentes n'ont pas les mêmes prix.

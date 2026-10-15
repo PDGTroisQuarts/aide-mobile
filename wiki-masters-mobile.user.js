@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.18.0
+// @version      1.19.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -278,12 +278,14 @@
     },
     // Aide à l'achat (pastilles sur /marketplace).
     buy: {
-      // Mise max pour revendre (v0.23.0) = vente rapide − resaleGap : au moins
-      // resaleGap wikibidous de gain en revendant au prix de vente rapide
-      // (400 = 2 étoiles depuis la v1.17.0, comme le bot de l'ordinateur ; 300
-      // avant, 200 en téléphone v1.13.0), comme le plafond « Revente » du bot
-      // de surenchère.
-      resaleGap: 400,
+      // Mise max pour revendre = palier de revente du bot de l'ordinateur
+      // (v1.19.0, demande de l'utilisateur du 15/10) : prix « Normal » −
+      // resaleGap s'il dépasse la vente rapide de plus de resaleMedianAbove,
+      // sinon vente rapide − resaleGap ; toujours sous la médiane. Comme le
+      // plafond « Revente » de la surenchère (v1.17.0 : vente rapide − 400 ;
+      // avant : − 300, 200 en v1.13.0).
+      resaleGap: 300,
+      resaleMedianAbove: 100,
       // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
       // fois sur les stats.countDays derniers jours : son prix vient de
       // vieilles ventes (ex. Karl Marx L à 33 000).
@@ -588,7 +590,8 @@
       collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
     }],
     ['Aide à l’achat (marché)', {
-      'buy.resaleGap': 'Mise max pour revendre = vente rapide moins (wikibidous ; 400 = 2 étoiles)',
+      'buy.resaleGap': 'Mise max pour revendre = « Normal » (s’il dépasse la vente rapide de plus de 100) ou vente rapide, moins (wikibidous)',
+      'buy.resaleMedianAbove': 'Mise max pour revendre : « Normal » pris s’il dépasse la vente rapide de plus de (wikibidous)',
       'buy.minRecentSales': 'Ni étoiles ni mise max sous (ventes sur la période 💤, 7 jours par défaut)',
       'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
       'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
@@ -750,6 +753,14 @@
       GM_setValue('wvm.settings', old);
     }
     GM_setValue('wvm.migr117', true);
+    // v1.19.0 : revente − 400 gardée dans les réglages remplacée par le palier
+    // de l'ordinateur (− 300, « Normal » s'il dépasse la vente rapide de + 100).
+    const cur = GM_getValue('wvm.settings', null);
+    if (cur && typeof cur === 'object' && !GM_getValue('wvm.migr119', false)) {
+      if (cur['buy.resaleGap'] === 400) delete cur['buy.resaleGap'];
+      GM_setValue('wvm.settings', cur);
+    }
+    GM_setValue('wvm.migr119', true);
   } catch (err) {
     // réglages illisibles : laissés tels quels
   }
@@ -853,9 +864,20 @@
   // rareté, même version). Sinon son prix vient de vieilles ventes : ni
   // étoiles ni mise max.
   const liquid = (sales7) => sales7 != null && sales7 >= CONFIG.buy.minRecentSales;
-  // Mise max pour revendre : vente rapide − resaleGap (400 = 2 étoiles de
-  // gain), jamais négative ; null si la carte ne se vend pas assez.
-  const resaleCapOf = (quick, sales7) => (quick != null && liquid(sales7) ? Math.max(0, quick - CONFIG.buy.resaleGap) : null);
+  // Mise max pour revendre = palier de revente de l'ordinateur : « Normal » −
+  // resaleGap si « Normal » dépasse la vente rapide de plus de
+  // resaleMedianAbove, sinon vente rapide − resaleGap ; jamais au niveau de la
+  // médiane ni au-dessus, jamais négative ; null si la carte ne se vend pas assez.
+  function resaleFrom(quick, normal, median) {
+    if (!Number.isFinite(quick)) return null;
+    const ref = Number.isFinite(normal) && normal - quick > CONFIG.buy.resaleMedianAbove ? normal : quick;
+    let cap = Math.round(ref) - CONFIG.buy.resaleGap;
+    if (Number.isFinite(median)) cap = Math.min(cap, Math.ceil(median) - 1);
+    return Math.max(0, cap);
+  }
+  const resaleCapOf = (quick, sales7, normal, median) => (quick != null && liquid(sales7) ? resaleFrom(quick, normal, median) : null);
+  const resaleNote = (quick, normal) => (Number.isFinite(normal) && normal - quick > CONFIG.buy.resaleMedianAbove
+    ? `« Normal » ${fmtPrice(normal)} − ${CONFIG.buy.resaleGap}` : `vente rapide ${fmtPrice(quick)} − ${CONFIG.buy.resaleGap}`);
   // Carte peu vendue et peu chère : ne vaut pas une place sur le marché.
   // Jours entre la dernière vente et la 10e dernière (même rareté, même
   // version) ; null s'il y en a moins de 10.
@@ -1407,7 +1429,7 @@
     // Résumé d'avant la v0.9.2 (sans ventes sur 7 jours) : affiché, et relu.
     // Mise max pour revendre calculée ici (v0.23.0) : les résumés anciens
     // (plafond de l'ancien modèle en v[2]) suivent la nouvelle règle.
-    return { median: v[0], n: v[1], resaleCap: resaleCapOf(v[7] ?? null, v[6] ?? null), normal: v[5] ?? null,
+    return { median: v[0], n: v[1], resaleCap: resaleCapOf(v[7] ?? null, v[6] ?? null, v[5] ?? null, v[0]), normal: v[5] ?? null,
       sales7: v[6] ?? null, sales48: v.length >= 10 ? v[9] : undefined, quick: v[7] ?? null, span10: v[8] === undefined ? undefined : v[8] < 0 ? null : v[8],
       stale: stale || (v[0] !== null && v.length < 7), t: e.t || null };
   }
@@ -1550,7 +1572,7 @@
     const k = 1 + p.beta;
     const up = (x) => (x == null ? x : Math.round(x * k));
     return { ...base, median: up(base.median), normal: up(base.normal), quick: up(base.quick),
-      resaleCap: resaleCapOf(up(base.quick), base.sales7), shinyVia: 'prime', premium: p };
+      resaleCap: resaleCapOf(up(base.quick), base.sales7, up(base.normal), up(base.median)), shinyVia: 'prime', premium: p };
   }
   // Même chose pour les conseils complets (fiche, page d'une enchère).
   function shinyAdvice(sales, rarity) {
@@ -2631,7 +2653,7 @@
     const unsure = info.shiny && sum.shinyVia === 'inconnue';
     const caps = sum.resaleCap == null
       ? 'Mise max pour revendre : vente rapide inconnue (relecture en cours).'
-      : `Mise max pour revendre : ${fmtPrice(sum.resaleCap)} (vente rapide ${fmtPrice(sum.quick)} − ${CONFIG.buy.resaleGap})`;
+      : `Mise max pour revendre : ${fmtPrice(sum.resaleCap)} (${resaleNote(sum.quick, sum.normal)})`;
     return {
       bg: rate.color,
       loss: rate.loss,
@@ -3396,7 +3418,7 @@
       // Ventes récentes (v0.23.0) : moins de minRecentSales → ni étoiles ni mise max.
       const recentOk = liquid(buy.sales7);
       const recentNote = `${buy.sales7 ?? '?'} vente(s) en ${CONFIG.stats.countDays} jours (il en faut ${CONFIG.buy.minRecentSales})`;
-      const resaleCap = resaleCapOf(adv.quick, buy.sales7);
+      const resaleCap = resaleCapOf(adv.quick, buy.sales7, pr.normal, adv.median);
       const collectionCap = recentOk ? Math.floor(adv.median) : null;
       const verdict = pay == null ? null
         : !recentOk ? ['', `💤 Prix incertain : ${recentNote}. Ni étoiles ni mise max.`]
@@ -3418,7 +3440,7 @@
         : `<div class="wv-cap ${cls}"><span>${label}</span><b>${fmtPrice(value)} ${pay == null ? '' : pay <= value ? '✓' : '✗'}</b></div>`);
       body += `<div class="wv-caps">${cap('wv-quick', 'max revente', resaleCap)}`
         + `${cap('wv-ambitious', 'max collection', collectionCap)}</div>`;
-      if (resaleCap !== null) body += `<div class="wv-status">Max revente = vente rapide ${fmtPrice(adv.quick)} − ${CONFIG.buy.resaleGap}</div>`;
+      if (resaleCap !== null) body += `<div class="wv-status">Max revente = ${resaleNote(adv.quick, pr.normal)}</div>`;
       buy.summary = pay == null ? '' : recentOk ? `<span style="--wv-c:${rate.color}">${rate.html}</span> ${verdict[1].split(' ')[0]}`
         : `💤 ${buy.sales7 ?? '?'}/${CONFIG.stats.countDays} j`;
       if (!recentOk) body += `<div class="wv-status">Pas de mise max : ${recentNote}.</div>`;
@@ -3447,8 +3469,9 @@
   // façon, le plus récent l'emporte. Le téléphone ne mise jamais.
   // Données : la liste « Mes enchères » que la page du marché charge elle-même
   // (aucune requête en plus), relue ensuite toutes les 2 à 5 min tant que la
-  // page est affichée ; plafonds calculés comme sur la tablette (revente = vente
-  // rapide − resaleGap, collection = médiane ; rien sous 5 ventes en 7 jours).
+  // page est affichée ; plafonds calculés comme sur la tablette (revente =
+  // palier de revente, resaleFrom ; collection = médiane ; rien sous 5 ventes
+  // en 7 jours ni sans rareté).
   const KEY_R_TOPIC = 'wr.topic';
   const KEY_R_MODES = 'wr.modes';
   const KEY_R_MODES_AT = 'wr.modesAt';
@@ -3688,12 +3711,15 @@
         const useOwn = !!own && own.buy.enough && own.buy.n >= CONFIG.shiny.ownMinSales;
         const adv = useOwn ? own : adviceFor(data.sales || [], a.rarity, false);
         const b = adv.buy;
-        // Comme la tablette (v1.9.0) : revente = vente rapide − resaleGap,
-        // collection = médiane ; rien si moins de minRecentSales ventes en 7 jours.
-        const recentOk = b.enough && liquid(adv.sales7);
+        // Comme la tablette (bot v1.8.12) : revente = palier de revente (Normal
+        // − 300 si Normal dépasse la vente rapide de plus de 100, sinon vente
+        // rapide − 300, sous la médiane), collection = médiane ; rien si moins de
+        // minRecentSales ventes en 7 jours ou rareté inconnue.
+        const recentOk = !!a.rarity && b.enough && liquid(adv.sales7);
+        const normal = b.enough ? Math.max(b.quick, Math.round(b.median)) : null;
         remote.caps.set(key, { at: Date.now(), n: b.n || 0, recent: adv.sales7 ?? 0, enough: recentOk,
-          resale: b.enough ? resaleCapOf(b.quick, adv.sales7) : null, collection: recentOk ? Math.floor(b.median) : null,
-          median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn });
+          resale: recentOk ? resaleFrom(b.quick, normal, b.median) : null, collection: recentOk ? Math.floor(b.median) : null,
+          median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn, noRarity: !a.rarity });
       }).catch(() => {}).finally(() => remote.capsBusy.delete(key));
     }
   }
@@ -3733,6 +3759,7 @@
       const btn = (m, label) => `<button data-id="${esc(a.id)}" data-title="${esc(a.title)}" data-rmode="${m}" class="${mode === m ? 'on' : ''}">${label}</button>`;
       const next = nextOf(a);
       const capNote = invalid ? ' (plafond manuel refusé : choisis-en un autre)'
+        : c && cap == null && mode !== 'off' && c.noRarity ? ' (rareté inconnue : pas de plafond auto ; « Manuel » seulement)'
         : c && cap == null && mode !== 'off' ? ` (${c.recent ?? '?'} vente(s) en ${CONFIG.stats.countDays} j : prix incertain, pas de plafond auto ; « Manuel » seulement)`
           : a.shiny && c && c.shinyFallback && mode !== 'manual' && mode !== 'off' ? ' (shiny : plafond d’une carte normale)' : '';
       return `<div class="wr-row ${cls}">

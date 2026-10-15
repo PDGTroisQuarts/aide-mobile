@@ -9,6 +9,12 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.19.0** (15/10) : mise max pour revendre (encart d'une enchère, pastilles)
+et plafond « Revente » de la télécommande = palier de revente du bot de
+l'ordinateur (v1.8.12) : prix « Normal » − 300 s'il dépasse la vente rapide de
+plus de 100, sinon vente rapide − 300, toujours sous la médiane (avant : vente
+rapide − 400). Réglage « revente − 400 » gardé dans les réglages remplacé.
+
 **v1.18.0** (14/10) : sur « Toutes les cartes » (global-collection), la fiche
 ouverte propose aussi **🛒 Shopping : x1 / En continu**.
 

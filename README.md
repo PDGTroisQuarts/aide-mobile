@@ -9,6 +9,9 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.20.1** (19/10, avec le bot de l'ordinateur v1.10.1) : textes du shopping
+(carte x1 🔥 ou 🔥🔥 : prix de revente pendant 2 jours, puis la médiane).
+
 **v1.20.0** (19/10, avec le bot de l'ordinateur v1.10.0) :
 - **🔥🔥** sur une carte vendue au moins 30 fois en 48 h (🔥 dès 16) ;
 - bouton **❤ Je la veux !** à côté de 🛒 Shopping (fiche, page d'une enchère,

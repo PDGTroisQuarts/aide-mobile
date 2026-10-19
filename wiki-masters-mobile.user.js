@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.20.0
+// @version      1.20.1
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -2328,7 +2328,7 @@
     panel.style.display = 'block';
     panel.dataset.mode = 'global';
     panel.innerHTML = `<header><span class="wv-title">${esc(g.title)}</span>${pill}<span class="wv-sum">🛒</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
-      + `<div class="wv-body"><div class="wv-status">Shopping : mise sous la médiane (❤ Je la veux ! : sous P70), sans prix maximum ; ajoutée sur tous les appareils.</div>${shopRow(g.title, g.rarity)}${gearRow}</div>`;
+      + `<div class="wv-body"><div class="wv-status">Shopping : mise sous la médiane (❤ Je la veux ! : sous P70 ; x1 🔥 : prix de revente 2 jours, puis médiane), sans prix maximum ; ajoutée sur tous les appareils.</div>${shopRow(g.title, g.rarity)}${gearRow}</div>`;
   }
   async function tick() {
     if (busy || document.hidden) return;
@@ -3649,7 +3649,7 @@
       if (!rTopic()) return;
     }
     const what = `« ${title} »${rarity ? ` (${rarity})` : ' (toutes raretés)'} ${mode === 'loop' ? 'en continu' : 'une fois (x1)'}`;
-    const how = want ? 'jusqu’à P70 (« Ambitieux » ; médiane sous 8 ventes), la surenchère suivant jusqu’à P70' : 'sous la médiane (ou jusqu’à P70 si la carte est déjà en « Je la veux ! » : ce choix reste tel quel)';
+    const how = want ? 'jusqu’à P70 (« Ambitieux » ; médiane sous 8 ventes), la surenchère suivant jusqu’à P70' : 'sous la médiane (x1 🔥 / 🔥🔥 : au plus le prix de revente pendant 2 jours, puis la médiane ; jusqu’à P70 si la carte est déjà en « Je la veux ! » : ce choix reste tel quel)';
     if (!confirm(`Ajouter ${what}${want ? ' en « Je la veux ! »' : ''} à la liste du bot shopping ?\n\nLe bot misera ${how}, sans prix maximum (solde gardé au-dessus de 10 000).`)) return;
     const id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
     const message = JSON.stringify({ t: 'shop', op: 'add', d: '*', n: String(title).slice(0, 80), r: rarity || '', m: mode === 'loop' ? 'loop' : 'one', ...(want ? { w: 1 } : {}), at: Date.now(), id });

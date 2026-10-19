@@ -111,6 +111,11 @@
   .shop .add input, .shop .add select { font: 500 16px/1.2 var(--font-ui); padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-height: 44px; }
   .shop .add input { flex: 1 1 220px; min-width: 0; }
   .btn.ghost { background: var(--off-bg); color: var(--ink); padding: 10px 14px; min-height: 40px; }
+  /* « Je la veux ! » (v1.10.0) : bouton bascule par carte, case à l'ajout. */
+  .shop .acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+  .btn.ghost.want[aria-pressed="true"] { background: var(--on-bg); color: var(--on); outline: 2px solid var(--on); outline-offset: -2px; }
+  .shop .add .want { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 500; }
+  .shop .add .want input { width: 22px; height: 22px; min-height: 0; flex: none; accent-color: var(--accent); }
   @media (prefers-reduced-motion: no-preference) { .btn { transition: filter .15s; } .btn:not(:disabled):hover { filter: brightness(1.08); } }
 </style>
 </head>
@@ -148,7 +153,7 @@
   // Révision de cette page : l'appareil en attend une plus récente (champ
   // « tb » de son état) → page gardée en cache par le navigateur
   // (avertissement). À monter avec CONFIG.devices.dashboardRev du script.
-  const PAGE_REV = 4;
+  const PAGE_REV = 5;
   const RARITIES = ['L', 'UR', 'SR', 'R', 'PC', 'C'];
   // Bots de l'état reçu : ceux de la page, puis ceux qu'elle ne connaît pas
   // encore (bot plus récent que la page) ; ancien nom du shopping (v1.7).
@@ -159,7 +164,7 @@
     const known = new Set(BOTS.map(([b]) => b));
     return [...BOTS.map(([b, label]) => [b, label, bots[b]]), ...Object.keys(bots).filter((b) => !known.has(b)).map((b) => [b, `Bot ${b}`, bots[b]])];
   }
-  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false, shopSent: {}, shopNote: '' };
+  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false, shopSent: {}, shopNote: '', shopWant: false };
   const $ = (id) => document.getElementById(id);
   const store = {
     get() { try { return localStorage.getItem('wm.sujet') || ''; } catch (err) { return ''; } },
@@ -341,6 +346,8 @@
   // Liste lue dans l'état de l'appareil où tourne le shopping (sinon le plus
   // récent qui en a une) ; ajout et retrait envoyés à cet appareil (« * » : les
   // deux) par « <sujet>-commande », appliqués à sa prochaine relève (~1 min).
+  // « Je la veux ! » (bot v1.10.0, état tb ≥ 5) : mise jusqu'à P70 au lieu de la
+  // médiane ; champ w de l'ajout, bascule d'une carte par son numéro (op set).
   function shopSource() {
     const have = DEVICES.map(([d, name]) => [d, name, state.devices[d]]).filter(([, , st]) => st && Array.isArray(st.shop));
     const on = have.find(([, , st]) => st.bots && st.bots.shopping && st.bots.shopping.s && st.bots.shopping.s !== 'off');
@@ -374,18 +381,32 @@
     const row = el('div', 'drow');
     row.append(el('h2', 'dname', 'Shopping'), el('span', `pill ${src.running ? 'on' : 'off'}`, src.running ? `Actif : ${src.name.toLowerCase()}` : 'Bot OFF'));
     head.append(row, el('div', 'seen', `Liste de souhaits de ${src.name === 'Tablette' ? 'la tablette' : 'l’ordinateur'} (état ${ago(src.st.at)})${src.running ? '' : ' · le bot shopping ne tourne sur aucun appareil'}`));
+    const canWant = Number(src.st.tb) >= 5;
     const list = el('ul', 'items');
-    for (const [id, name, rarity, mode, end] of src.st.shop) {
+    for (const [id, name, rarity, mode, end, want] of src.st.shop) {
       const li = el('li', 'item');
       const info = el('div');
-      info.append(el('div', 'iname', name), el('div', 'detail', `${rarity || 'toutes raretés'} · ${mode === 'loop' ? 'en continu' : 'x1'}${end ? ` · misée, fin à ${clock(end)}` : ''}`));
+      info.append(el('div', 'iname', name), el('div', 'detail', `${rarity || 'toutes raretés'} · ${mode === 'loop' ? 'en continu' : 'x1'}${want ? ' · Je la veux ! (P70)' : ''}${end ? ` · misée, fin à ${clock(end)}` : ''}`));
+      const acts = el('div', 'acts');
+      if (canWant) {
+        const wAsked = state.shopSent[`want|${id}`] && Date.now() - state.shopSent[`want|${id}`] < RESEND_MS;
+        const wb = el('button', 'btn ghost want', wAsked ? 'Demandé' : 'Je la veux !');
+        wb.type = 'button';
+        wb.disabled = !!wAsked;
+        wb.setAttribute('aria-pressed', want ? 'true' : 'false');
+        wb.setAttribute('aria-label', `Je la veux ! pour ${name} (mise jusqu’à P70)`);
+        // Pour les deux appareils : numéro de cette liste, et nom + rareté pour l'autre.
+        wb.addEventListener('click', () => shopSend({ op: 'set', d: '*', i: id, n: name, r: rarity, w: want ? 0 : 1 }, `want|${id}`, wb));
+        acts.append(wb);
+      }
       const asked = state.shopSent[`del|${id}`] && Date.now() - state.shopSent[`del|${id}`] < RESEND_MS;
       const btn = el('button', 'btn ghost', asked ? 'Retrait demandé' : 'Retirer');
       btn.type = 'button';
       btn.disabled = !!asked;
       btn.setAttribute('aria-label', `Retirer ${name} de la liste de shopping`);
       btn.addEventListener('click', () => shopSend({ op: 'del', d: src.dev, i: id }, `del|${id}`, btn));
-      li.append(info, btn);
+      acts.append(btn);
+      li.append(info, acts);
       list.append(li);
     }
     if (!src.st.shop.length) list.append(el('li', 'empty', 'Liste vide.'));
@@ -417,6 +438,16 @@
     add.type = 'submit';
     r2.append(rar, qty, add);
     form.append(r1, r2);
+    const wantBox = el('input');
+    if (canWant) {
+      const label = el('label', 'want');
+      wantBox.type = 'checkbox';
+      wantBox.name = 'veux';
+      wantBox.checked = !!state.shopWant;
+      wantBox.addEventListener('change', () => { state.shopWant = wantBox.checked; });
+      label.append(wantBox, document.createTextNode('Je la veux ! (mise jusqu’à P70 au lieu de la médiane)'));
+      form.append(label);
+    }
     if (state.shopNote) form.append(el('div', 'detail', state.shopNote));
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -427,7 +458,8 @@
         render();
         return;
       }
-      shopSend({ op: 'add', d: src.d, n, r: rar.value, m: qty.value }, `add|${n}`, add);
+      // Sans « Je la veux ! » coché : w absent, laissé tel quel pour une carte déjà là.
+      shopSend({ op: 'add', d: src.d, n, r: rar.value, m: qty.value, ...(canWant && wantBox.checked ? { w: 1 } : {}) }, `add|${n}`, add);
     });
     box.append(head, list, form);
   }
@@ -450,7 +482,7 @@
     box.textContent = '';
     if (state.topic && $('setup').hidden) for (const [d, name] of DEVICES) box.append(deviceCard(d, name));
     // Formulaire en cours de saisie : jamais redessiné sous les doigts.
-    const typing = document.activeElement && $('shop').contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
+    const typing = document.activeElement && $('shop').contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName) && document.activeElement.type !== 'checkbox';
     if (state.topic && $('setup').hidden) {
       if (!typing) shopCard();
     } else $('shop').hidden = true;

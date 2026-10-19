@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.19.0
+// @version      1.20.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -233,6 +233,9 @@
     // rareté) sur les 48 dernières heures. 16 = « plus de 15 » (v1.15.0, comme
     // l'aide v0.32.0 ; 10 avant).
     hotSales48h: 16,
+    // 🔥🔥 (v1.20.0, comme le bot v1.10.0) : au moins veryHotSales48h ventes
+    // sur la même période. Affichage seul : « jamais à défausser » suit 🔥.
+    veryHotSales48h: 30,
     // « Se vend peu » (💤), quel que soit le prix : moins de thinSales7d ventes
     // (même carte, même rareté) sur 7 jours (10 depuis la v1.15.0 ; 5 avant).
     // thinSpanDays > 0 : ou plus de thinSpanDays jours entre sa dernière vente
@@ -286,6 +289,9 @@
       // avant : − 300, 200 en v1.13.0).
       resaleGap: 300,
       resaleMedianAbove: 100,
+      // Mise max de l'achat des bonnes affaires du bot (v1.10.0) : au plus la
+      // vente rapide, au moins dealP60Gap sous le P60, toujours sous la médiane.
+      dealP60Gap: 500,
       // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
       // fois sur les stats.countDays derniers jours : son prix vient de
       // vieilles ventes (ex. Karl Marx L à 33 000).
@@ -334,6 +340,9 @@
       // ambitiousMinSales ventes.
       minSales: 3,
       quickQuantile: 0.35,
+      // P60 (v1.20.0, comme le bot v1.10.0) : base de la mise max de l'achat
+      // des bonnes affaires (plafond « Achat » de la télécommande).
+      p60Quantile: 0.6,
       ambitiousQuantile: 0.7,
       ambitiousMinSales: 8,
       // Confiance : faible sous la 1re valeur de ventes, moyenne sous la 2e.
@@ -551,6 +560,7 @@
       'stats.quickQuantile': '« Vente rapide » = ce quantile des ventes (0,35 = P35) [0-1]',
       'stats.ambitiousMinSales': '« Ambitieux » à partir de (ventes)',
       'stats.ambitiousQuantile': '« Ambitieux » = ce quantile des ventes (0,7 = P70) [0-1]',
+      'stats.p60Quantile': 'P60 (base du plafond « Achat ») = ce quantile des ventes (0,6 = P60) [0-1]',
       'stats.confidence': 'Confiance faible sous, moyenne sous (ventes ; ventes)',
       'stats.memoMs': 'Conseils d’une carte recalculés au plus toutes les (ms)',
     }],
@@ -577,12 +587,13 @@
       'profile.cards': 'Base mesurée : cartes gardées',
       'profile.cacheMin': 'Base mesurée : recalculée au plus toutes les (minutes)',
     }],
-    ['Valeur des cartes (💤, 🔥, sans valeur)', {
+    ['Valeur des cartes (💤, 🔥, 🔥🔥, sans valeur)', {
       thinSales7d: '💤 « Se vend peu » : moins de (ventes sur la période ci-dessous)',
       'stats.countDays': '💤 : période comptée (jours)',
       thinSpanDays: '💤 : ou plus de (jours) entre la dernière vente et la N-ième (0 = critère pas utilisé)',
       'stats.spanSales': '💤 : N (rang de la vente comparée)',
       hotSales48h: '🔥 « Se vend beaucoup » : au moins (ventes sur la période ci-dessous)',
+      veryHotSales48h: '🔥🔥 « Se vend énormément » : au moins (ventes sur la même période)',
       'stats.hotHours': '🔥 : période comptée (heures)',
       worthlessBelow: 'À défausser (se vend normalement) : prix « Normal » sous (wikibidous)',
       thinWorthlessBelow: 'À défausser si 💤 : prix « Normal » sous (wikibidous)',
@@ -592,6 +603,7 @@
     ['Aide à l’achat (marché)', {
       'buy.resaleGap': 'Mise max pour revendre = « Normal » (s’il dépasse la vente rapide de plus de 100) ou vente rapide, moins (wikibidous)',
       'buy.resaleMedianAbove': 'Mise max pour revendre : « Normal » pris s’il dépasse la vente rapide de plus de (wikibidous)',
+      'buy.dealP60Gap': 'Plafond « Achat » (bot de l’ordinateur) : au moins (wikibidous) sous le P60',
       'buy.minRecentSales': 'Ni étoiles ni mise max sous (ventes sur la période 💤, 7 jours par défaut)',
       'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
       'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
@@ -859,6 +871,8 @@
   const sales48h = (sales, rarity, now, shiny = false) => sales
     .filter((s) => (!rarity || s.rarity === rarity) && now - tsOf(s) <= CONFIG.stats.hotHours * 3600000 && isShinySale(s) === shiny).length;
   const isHot = (sales48) => sales48 != null && sales48 >= CONFIG.hotSales48h;
+  // Marque affichée : 🔥🔥 dès veryHotSales48h, 🔥 dès hotSales48h (affichage seul).
+  const hotMark = (sales48) => (!isHot(sales48) ? '' : sales48 >= CONFIG.veryHotSales48h ? '🔥🔥' : '🔥');
   // Étoiles et mises max automatiques (v0.23.0) : seulement pour une carte
   // vendue au moins minRecentSales fois sur les countDays derniers jours (même
   // rareté, même version). Sinon son prix vient de vieilles ventes : ni
@@ -876,6 +890,13 @@
     return Math.max(0, cap);
   }
   const resaleCapOf = (quick, sales7, normal, median) => (quick != null && liquid(sales7) ? resaleFrom(quick, normal, median) : null);
+  // Mise max de l'achat des bonnes affaires (bot v1.10.0, dealMax) : plafond
+  // « Achat » de la surenchère qui suit une mise de l'achat.
+  function dealMax(quick, median, normal, p60) {
+    if (!Number.isFinite(quick) || !Number.isFinite(median) || !Number.isFinite(p60)) return null;
+    const under = Math.ceil(Math.min(median, Number.isFinite(normal) ? normal : median)) - 1;
+    return Math.max(0, Math.min(Math.round(quick), Math.round(p60) - CONFIG.buy.dealP60Gap, under));
+  }
   const resaleNote = (quick, normal) => (Number.isFinite(normal) && normal - quick > CONFIG.buy.resaleMedianAbove
     ? `« Normal » ${fmtPrice(normal)} − ${CONFIG.buy.resaleGap}` : `vente rapide ${fmtPrice(quick)} − ${CONFIG.buy.resaleGap}`);
   // Carte peu vendue et peu chère : ne vaut pas une place sur le marché.
@@ -917,6 +938,7 @@
     const quick = Math.max(1, Math.round(quickRaw));
     const normal = Math.max(quick, Math.round(best));
     const ambitious = ambitiousRaw === null ? null : Math.max(normal + 1, Math.round(ambitiousRaw));
+    const p60 = Math.max(quick, Math.round(quantile(prices, CONFIG.stats.p60Quantile)));
     return {
       enough: true,
       n,
@@ -930,6 +952,7 @@
       quickShare: share(quick),
       normal,
       normalShare: share(normal),
+      p60,
       ambitious,
       ambitiousShare: ambitious === null ? null : share(ambitious),
       confidence: n < CONFIG.stats.confidence[0] ? 'faible' : n < CONFIG.stats.confidence[1] ? 'moyenne' : 'bonne',
@@ -2097,7 +2120,7 @@
     #wv-panel .wr-over { --wv-c: #ef4444; background: rgba(239,68,68,.14); } #wv-panel .wr-over .wr-t, #wv-panel .wr-over .wr-s { color: #fca5a5; }
     #wv-panel .wr-t { font-weight: 700; display: flex; justify-content: space-between; gap: 6px; }
     #wv-panel .wr-s { font-size: 12px; color: #d4d4d8; margin-top: 2px; }
-    #wv-panel .wr-modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 6px; }
+    #wv-panel .wr-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(64px, 1fr)); gap: 4px; margin-top: 6px; }
     #wv-panel .wr-modes button { border: 0; border-radius: 8px; min-height: 34px; font: inherit; font-size: 11px;
       background: rgba(255,255,255,.08); color: #e4e4e7; }
     #wv-panel .wr-modes button.on { background: #e4e4e7; color: #18181b; font-weight: 700; }
@@ -2112,6 +2135,7 @@
     #wv-panel .wv-shop-row { flex-wrap: wrap; }
     #wv-panel .wv-shop-row button { border: 0; border-radius: 8px; min-height: 34px; padding: 0 12px; font: inherit; font-size: 12px;
       background: rgba(255,255,255,.08); color: #e4e4e7; }
+    #wv-panel .wv-shop-row button.on { background: #f472b6; color: #18181b; font-weight: 700; }
     #wv-panel button.wv-gear { border: 0; border-radius: 8px; min-height: 32px; padding: 0 12px; font: inherit; font-size: 12px;
       background: rgba(255,255,255,.08); color: #e4e4e7; }
   `;
@@ -2141,9 +2165,17 @@
       render();
       return;
     }
+    const wb = e.target.closest('button[data-shopwant]');
+    if (wb) {
+      Object.assign(shopState, { wantKey: `${simplify(wb.dataset.title)}|${wb.dataset.rarity || ''}`, want: wb.dataset.shopwant === '1' });
+      lastBuyHtml = '';
+      remote.touchedAt = 0;
+      render();
+      return;
+    }
     const sb = e.target.closest('button[data-shop]');
     if (sb) {
-      shopAsk(sb.dataset.title, sb.dataset.rarity || '', sb.dataset.shop);
+      shopAsk(sb.dataset.title, sb.dataset.rarity || '', sb.dataset.shop, shopWantOn(`${simplify(sb.dataset.title)}|${sb.dataset.rarity || ''}`));
       return;
     }
     const rb = e.target.closest('button[data-rmode]');
@@ -2266,7 +2298,7 @@
           body += `<div class="wv-tip">💤 Se vend peu : ${esc(thinText(state.sales7, state.span10))}.</div>`;
         }
       }
-      if (isHot(state.sales48)) body += `<div class="wv-tip">🔥 Se vend beaucoup : ${state.sales48} ventes en ${CONFIG.stats.hotHours} h.</div>`;
+      if (isHot(state.sales48)) body += `<div class="wv-tip">${hotMark(state.sales48)} Se vend beaucoup : ${state.sales48} ventes en ${CONFIG.stats.hotHours} h.</div>`;
       if (timing && timing.later) {
         body += `<div class="wv-tip">💡 Lancer ${fmtTime(timing.later.start)} avec ${fmtDuration(timing.later.minutes)} : fin ${hhmm(timing.later.end)}, environ +${fmtPrice(timing.later.gain)} wikibidous sur le prix « Normal »</div>`;
       }
@@ -2296,7 +2328,7 @@
     panel.style.display = 'block';
     panel.dataset.mode = 'global';
     panel.innerHTML = `<header><span class="wv-title">${esc(g.title)}</span>${pill}<span class="wv-sum">🛒</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
-      + `<div class="wv-body"><div class="wv-status">Shopping : mise sous la médiane, sans prix maximum ; ajoutée sur tous les appareils.</div>${shopRow(g.title, g.rarity)}${gearRow}</div>`;
+      + `<div class="wv-body"><div class="wv-status">Shopping : mise sous la médiane (❤ Je la veux ! : sous P70), sans prix maximum ; ajoutée sur tous les appareils.</div>${shopRow(g.title, g.rarity)}${gearRow}</div>`;
   }
   async function tick() {
     if (busy || document.hidden) return;
@@ -2657,13 +2689,13 @@
     return {
       bg: rate.color,
       loss: rate.loss,
-      text: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${rate.text}${unsure ? ' ?' : ''}`,
-      html: `${collection ? '📚 ' : ''}${star}${isHot(sum.sales48) ? '🔥' : ''}${rate.html}${unsure ? ' ?' : ''}`,
+      text: `${collection ? '📚 ' : ''}${star}${hotMark(sum.sales48)}${rate.text}${unsure ? ' ?' : ''}`,
+      html: `${collection ? '📚 ' : ''}${star}${hotMark(sum.sales48)}${rate.html}${unsure ? ' ?' : ''}`,
       tip: `${head} — ${sum.n} ventes récentes${sum.stale ? ' (valeur ancienne, relecture en cours)' : ''}\n`
         + (info.shiny ? `${shinyNote(sum.shinyVia, sum.premium, sum.n)}\n` : '')
         + `${info.hasBid ? 'Prochaine mise ≈' : 'Mise de départ :'} ${fmtPrice(info.pay)}, revente (${ref.name}) ${fmtPrice(ref.price)} → ${fmtGain(gain)} wikibidous : ${rate.loss ? `perte de ${fmtLoss(rate.pct).slice(1)}` : rate.text}\n`
         + `Vente rapide ${sum.quick != null ? fmtPrice(sum.quick) : '—'} · normale ${sum.normal != null ? fmtPrice(sum.normal) : '—'} · médiane ${fmtPrice(sum.median)}\n${caps}\n`
-        + (isHot(sum.sales48) ? `🔥 Se vend beaucoup : ${sum.sales48} ventes en ${CONFIG.stats.hotHours} h\n` : '')
+        + (isHot(sum.sales48) ? `${hotMark(sum.sales48)} Se vend beaucoup : ${sum.sales48} ventes en ${CONFIG.stats.hotHours} h\n` : '')
         + `${collectionLine}\nDétail complet : ouvre l’enchère.`,
     };
   }
@@ -3151,18 +3183,18 @@
       } else if (profile) {
         const thin = isThin(sum.sales7, sum.span10);
         const quick = sum.quick != null ? sum.quick : sum.normal;
-        text = `${thin ? '💤 ' : isHot(sum.sales48) ? '🔥 ' : ''}${fmtPrice(quick)}`;
+        text = `${thin ? '💤 ' : isHot(sum.sales48) ? `${hotMark(sum.sales48)} ` : ''}${fmtPrice(quick)}`;
         bg = valueColor(quick, thin, shiny ? null : rarity, isHot(sum.sales48));
         tip = `${head} : vente rapide estimée à ${fmtPrice(quick)} wikibidous · normale ${fmtPrice(sum.normal)}`
           + `${sum.median != null ? ` · médiane ${fmtPrice(sum.median)}` : ''} (${thinText(sum.sales7, sum.span10)})`
-          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.');
+          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. ${hotMark(sum.sales48)} Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.');
         if (trades) tradeValues.set(face, { quick, median: sum.median != null ? Math.round(sum.median) : quick });
       } else {
         const thin = isThin(sum.sales7, sum.span10);
-        text = `${thin ? '💤 ' : isHot(sum.sales48) ? '🔥 ' : ''}${fmtPrice(sum.normal)}`;
+        text = `${thin ? '💤 ' : isHot(sum.sales48) ? `${hotMark(sum.sales48)} ` : ''}${fmtPrice(sum.normal)}`;
         bg = valueColor(sum.normal, thin, shiny ? null : rarity, isHot(sum.sales48));
         tip = `${head} : vente « Normal » estimée à ${fmtPrice(sum.normal)} wikibidous (${thinText(sum.sales7, sum.span10)})`
-          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. 🔥 Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.')
+          + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. ${hotMark(sum.sales48)} Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.')
           + (worthless(sum.normal, thin, isHot(sum.sales48)) && discardRarity(rarity) ? ' → à défausser.' : '');
       }
       let b = cardBadges.get(face);
@@ -3463,7 +3495,8 @@
   // Télécommande du bot de surenchère (comme sur l'ordinateur)
   // ---------------------------------------------------------------------------
   // Sur la page du marché : les enchères où tu as misé, avec les boutons de
-  // plafond du bot de la tablette (Revente, Collec., Manuel, Arrêt). Chaque
+  // plafond du bot de la tablette (Revente, Collec., Manuel, Arrêt ; « Achat »
+  // et « Je la veux ! » quand un bot de l'ordinateur les a posés, v1.20.0). Chaque
   // choix part vers la tablette par ntfy.sh (sujet « <sujet>-encheres », celui
   // du bot de surenchère) ; les choix faits ailleurs arrivent ici de la même
   // façon, le plus récent l'emporte. Le téléphone ne mise jamais.
@@ -3487,7 +3520,13 @@
   const R_MAX_MANUAL = CONFIG.remote.maxManualCap;
   const R_UUID = new RegExp(`^${UUID}$`, 'i');
   const rValidManual = (v) => Number.isInteger(v) && v >= 1 && v <= R_MAX_MANUAL;
-  const rValidMode = (m) => m === 'resale' || m === 'collection' || m === 'off' || m === 'keep' || rValidManual(m);
+  const rValidMode = (m) => m === 'resale' || m === 'collection' || m === 'deal' || m === 'want' || m === 'off' || m === 'keep' || rValidManual(m);
+  // « Achat » voyage comme un plafond manuel égal à la mise max (sinon
+  // « Revente ») + deal, « Je la veux ! » comme « Collec. » + want (bot
+  // v1.10.0) : une version plus ancienne applique le mode de base.
+  const rFromWire = (msg) => (msg.deal === true && (msg.mode === 'resale' || rValidManual(msg.mode)) ? 'deal'
+    : msg.mode === 'collection' && msg.want === true ? 'want' : msg.mode);
+  const rToWire = (mode) => (mode === 'deal' ? { mode: 'resale', deal: true } : mode === 'want' ? { mode: 'collection', want: true } : { mode });
   // Montant saisi : chiffres, éventuellement séparés par milliers (« 1 200 »,
   // « 1.200 »). Une décimale (« 12,5 ») est refusée : avant la v1.4.0, elle
   // donnait 125.
@@ -3556,8 +3595,8 @@
     const c = remote.caps.get(capsKey(a)) || null;
     if (mode === 'off') return { mode, cap: null, c };
     if (typeof mode === 'number') return rValidManual(mode) ? { mode: 'manual', cap: mode, c } : { mode: 'manual', cap: null, c, invalid: true };
-    if (mode !== 'resale' && mode !== 'collection') return { mode: 'resale', cap: null, c, invalid: true };
-    return { mode, cap: c ? (mode === 'collection' ? c.collection : c.resale) : null, c };
+    if (!['resale', 'collection', 'deal', 'want'].includes(mode)) return { mode: 'resale', cap: null, c, invalid: true };
+    return { mode, cap: c ? c[mode] ?? null : null, c };
   }
 
   function ntfyRequest(method, url, data) {
@@ -3580,13 +3619,17 @@
   }
   // Priorité 1 : message de service, jamais affiché ni sonné sur le téléphone.
   const rPublish = (id, mode) => rSyncTopic() && ntfyRequest('POST', 'https://ntfy.sh/',
-    JSON.stringify({ topic: rSyncTopic(), message: JSON.stringify({ t: 'mode', id, mode, at: Date.now() }), priority: CONFIG.remote.modePriority }));
+    JSON.stringify({ topic: rSyncTopic(), message: JSON.stringify({ t: 'mode', id, ...rToWire(mode), at: Date.now() }), priority: CONFIG.remote.modePriority }));
   // Shopping à distance (v1.17.0, bot de l'ordinateur v1.8.6) : la carte de
   // la fiche ou de l'enchère est ajoutée à la liste de souhaits du bot
   // shopping par « <sujet>-commande » (même sujet que la télécommande), pour
   // les deux appareils (« * ») ; l'appareil l'ajoute à sa prochaine relève
   // (1 min environ). Liste complète, retraits : tableau de bord (menu).
-  const shopState = { key: '', at: 0, ok: false };
+  // « ❤ Je la veux ! » (v1.20.0, bot v1.10.0) : bascule avant x1 / En continu ;
+  // le bot misera alors jusqu'à P70 (« Ambitieux ») au lieu de la médiane.
+  // L'état vit ici (l'encart est redessiné en entier), pour la carte affichée.
+  const shopState = { key: '', at: 0, ok: false, wantKey: '', want: false };
+  const shopWantOn = (key) => shopState.wantKey === key && shopState.want;
   function shopRow(title, rarity) {
     if (!title) return '';
     const r = rarity || '';
@@ -3594,19 +3637,22 @@
     const sent = shopState.key === key && Date.now() - shopState.at < 10 * 60000;
     const note = !sent ? '' : shopState.ok ? 'demande envoyée : ajoutée à la liste du bot dans 1 min environ'
       : 'demande non envoyée (ntfy.sh ne répond pas) : réessaie';
+    const want = shopWantOn(key);
     const b = (mode, label) => `<button type="button" data-shop="${mode}" data-title="${esc(title)}" data-rarity="${esc(r)}">${label}</button>`;
-    return `<div class="wv-status wv-shop-row"><span>🛒 Shopping${r ? ` (${esc(r)})` : ''} :</span>${b('one', 'x1')}${b('loop', 'En continu')}${note ? `<span>${esc(note)}</span>` : ''}</div>`;
+    const w = `<button type="button" data-shopwant="${want ? 0 : 1}" data-title="${esc(title)}" data-rarity="${esc(r)}" aria-pressed="${want}" class="${want ? 'on' : ''}">❤ Je la veux !</button>`;
+    return `<div class="wv-status wv-shop-row"><span>🛒 Shopping${r ? ` (${esc(r)})` : ''} :</span>${w}${b('one', 'x1')}${b('loop', 'En continu')}${note ? `<span>${esc(note)}</span>` : ''}</div>`;
   }
-  async function shopAsk(title, rarity, mode) {
+  async function shopAsk(title, rarity, mode, want = false) {
     if (!rTopic()) {
       alert('Shopping : il faut d’abord le sujet ntfy de l’ordinateur (le même que sur la tablette et l’ordinateur).');
       remoteSetup();
       if (!rTopic()) return;
     }
     const what = `« ${title} »${rarity ? ` (${rarity})` : ' (toutes raretés)'} ${mode === 'loop' ? 'en continu' : 'une fois (x1)'}`;
-    if (!confirm(`Ajouter ${what} à la liste du bot shopping ?\n\nLe bot misera sous la médiane, sans prix maximum (solde gardé au-dessus de 10 000).`)) return;
+    const how = want ? 'jusqu’à P70 (« Ambitieux » ; médiane sous 8 ventes), la surenchère suivant jusqu’à P70' : 'sous la médiane (ou jusqu’à P70 si la carte est déjà en « Je la veux ! » : ce choix reste tel quel)';
+    if (!confirm(`Ajouter ${what}${want ? ' en « Je la veux ! »' : ''} à la liste du bot shopping ?\n\nLe bot misera ${how}, sans prix maximum (solde gardé au-dessus de 10 000).`)) return;
     const id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-    const message = JSON.stringify({ t: 'shop', op: 'add', d: '*', n: String(title).slice(0, 80), r: rarity || '', m: mode === 'loop' ? 'loop' : 'one', at: Date.now(), id });
+    const message = JSON.stringify({ t: 'shop', op: 'add', d: '*', n: String(title).slice(0, 80), r: rarity || '', m: mode === 'loop' ? 'loop' : 'one', ...(want ? { w: 1 } : {}), at: Date.now(), id });
     const res = await ntfyRequest('POST', 'https://ntfy.sh/', JSON.stringify({ topic: `${rTopic()}-commande`, message, priority: 1 }));
     Object.assign(shopState, { key: `${simplify(title)}|${rarity || ''}`, at: Date.now(), ok: res !== null });
     lastBuyHtml = '';
@@ -3635,9 +3681,10 @@
           if (!msg || msg.t !== 'mode') continue;
           // Contrôle (v1.4.0) : enchère au format attendu, choix valide, date
           // plausible (une date dans le futur bloquerait les choix suivants).
-          if (typeof msg.id === 'string' && R_UUID.test(msg.id) && rValidMode(msg.mode)
+          const mode = rFromWire(msg);
+          if (typeof msg.id === 'string' && R_UUID.test(msg.id) && rValidMode(mode)
             && Number.isFinite(msg.at) && msg.at <= Date.now() + CONFIG.remote.futureMin * 60000 && msg.at >= Date.now() - CONFIG.remote.pastHours * 3600000) {
-            rSetMode(msg.id.toLowerCase(), msg.mode, msg.at);
+            rSetMode(msg.id.toLowerCase(), mode, msg.at);
           }
         } catch (err) {
           // message étranger : ignoré
@@ -3713,12 +3760,17 @@
         const b = adv.buy;
         // Comme la tablette (bot v1.8.12) : revente = palier de revente (Normal
         // − 300 si Normal dépasse la vente rapide de plus de 100, sinon vente
-        // rapide − 300, sous la médiane), collection = médiane ; rien si moins de
-        // minRecentSales ventes en 7 jours ou rareté inconnue.
+        // rapide − 300, sous la médiane), collection = médiane ; bot v1.10.0 :
+        // achat = dealMax (vente rapide, P60 − 500, sous la médiane), « Je la
+        // veux ! » = Ambitieux (P70 dès 8 ventes, sinon médiane) ; rien si moins
+        // de minRecentSales ventes en 7 jours ou rareté inconnue.
         const recentOk = !!a.rarity && b.enough && liquid(adv.sales7);
         const normal = b.enough ? Math.max(b.quick, Math.round(b.median)) : null;
+        const pr = adv.price && adv.price.enough ? adv.price : {};
         remote.caps.set(key, { at: Date.now(), n: b.n || 0, recent: adv.sales7 ?? 0, enough: recentOk,
           resale: recentOk ? resaleFrom(b.quick, normal, b.median) : null, collection: recentOk ? Math.floor(b.median) : null,
+          deal: recentOk ? dealMax(b.quick, b.median, normal, pr.p60) : null,
+          want: recentOk ? (pr.ambitious != null ? pr.ambitious : Math.floor(b.median)) : null,
           median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn, noRarity: !a.rarity });
       }).catch(() => {}).finally(() => remote.capsBusy.delete(key));
     }
@@ -3766,7 +3818,7 @@
         <div class="wr-t"><span>${esc(a.title)}${a.rarity ? ` · ${esc(a.rarity)}` : ''}${a.shiny ? ' ✦' : ''}</span><span class="wr-left" data-end="${a.end}"></span></div>
         <div class="wr-s">Mise ${fmtPrice(a.current ?? a.base)} · ${lead ? 'tu es en tête' : `en tête : ${esc(a.leaderName || '—')}`} · prochaine ≥ ${fmtPrice(next)}</div>
         <div class="wr-s">Plafond ${cap == null ? '—' : fmtPrice(cap)}${over ? ' · dépassé' : ''}${capNote}</div>
-        <div class="wr-modes">${btn('resale', `Revente${c && c.resale != null ? ` ${fmtPrice(c.resale)}` : ''}`)}${btn('collection', `Collec.${c && c.collection != null ? ` ${fmtPrice(c.collection)}` : ''}`)}${btn('manual', mode === 'manual' ? `Manuel ${fmtPrice(cap)}` : 'Manuel…')}${btn('off', 'Arrêt')}</div>
+        <div class="wr-modes">${mode === 'deal' ? btn('deal', `Achat${c && c.deal != null ? ` ${fmtPrice(c.deal)}` : ''}`) : ''}${mode === 'want' ? btn('want', `Je la veux !${c && c.want != null ? ` ${fmtPrice(c.want)}` : ''}`) : ''}${btn('resale', `Revente${c && c.resale != null ? ` ${fmtPrice(c.resale)}` : ''}`)}${btn('collection', `Collec.${c && c.collection != null ? ` ${fmtPrice(c.collection)}` : ''}`)}${btn('manual', mode === 'manual' ? `Manuel ${fmtPrice(cap)}` : 'Manuel…')}${btn('off', 'Arrêt')}</div>
       </div>`;
     }).join('');
     const soonest = list.find((a) => a.end > Date.now());

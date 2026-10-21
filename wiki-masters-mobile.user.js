@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.20.1
+// @version      1.20.2
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -291,7 +291,7 @@
       resaleMedianAbove: 100,
       // Mise max de l'achat des bonnes affaires du bot (v1.10.0) : au plus la
       // vente rapide, au moins dealP60Gap sous le P60, toujours sous la médiane.
-      dealP60Gap: 500,
+      dealP60Gap: 400,
       // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
       // fois sur les stats.countDays derniers jours : son prix vient de
       // vieilles ventes (ex. Karl Marx L à 33 000).
@@ -3761,7 +3761,7 @@
         // Comme la tablette (bot v1.8.12) : revente = palier de revente (Normal
         // − 300 si Normal dépasse la vente rapide de plus de 100, sinon vente
         // rapide − 300, sous la médiane), collection = médiane ; bot v1.10.0 :
-        // achat = dealMax (vente rapide, P60 − 500, sous la médiane), « Je la
+        // achat = dealMax (vente rapide, P60 − 400, sous la médiane), « Je la
         // veux ! » = Ambitieux (P70 dès 8 ventes, sinon médiane) ; rien si moins
         // de minRecentSales ventes en 7 jours ou rareté inconnue.
         const recentOk = !!a.rarity && b.enough && liquid(adv.sales7);

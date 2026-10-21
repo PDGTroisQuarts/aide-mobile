@@ -9,6 +9,9 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.20.2** (21/10, avec le bot de l'ordinateur v1.10.2) : plafond « Achat »
+au moins 400 sous le P60 (au lieu de 500).
+
 **v1.20.1** (19/10, avec le bot de l'ordinateur v1.10.1) : textes du shopping
 (carte x1 🔥 ou 🔥🔥 : prix de revente pendant 2 jours, puis la médiane).
 
@@ -18,7 +21,7 @@ par défaut).
   Toutes les cartes) : le bot misera jusqu'au P70 (« Ambitieux ») au lieu de la
   médiane, et la surenchère suivra jusqu'au P70 ;
 - télécommande : plafonds **Achat** (mise max de l'achat des bonnes affaires :
-  au plus la vente rapide, 500 sous le P60, sous la médiane) et **Je la veux !**
+  au plus la vente rapide, 400 sous le P60, sous la médiane) et **Je la veux !**
   affichés quand le bot de l'ordinateur les a posés.
 
 **v1.19.0** (15/10) : mise max pour revendre (encart d'une enchère, pastilles)

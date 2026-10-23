@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.20.2
+// @version      1.21.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -289,9 +289,9 @@
       // avant : − 300, 200 en v1.13.0).
       resaleGap: 300,
       resaleMedianAbove: 100,
-      // Mise max de l'achat des bonnes affaires du bot (v1.10.0) : au plus la
-      // vente rapide, au moins dealP60Gap sous le P60, toujours sous la médiane.
-      dealP60Gap: 400,
+      // Mise max de l'achat des bonnes affaires du bot (v1.11.0) : médiane
+      // (entier inférieur) − dealMedianGap, jamais négative.
+      dealMedianGap: 300,
       // Ni étoiles ni mise max pour une carte vendue moins de minRecentSales
       // fois sur les stats.countDays derniers jours : son prix vient de
       // vieilles ventes (ex. Karl Marx L à 33 000).
@@ -340,8 +340,7 @@
       // ambitiousMinSales ventes.
       minSales: 3,
       quickQuantile: 0.35,
-      // P60 (v1.20.0, comme le bot v1.10.0) : base de la mise max de l'achat
-      // des bonnes affaires (plafond « Achat » de la télécommande).
+      // P60 : plus utilisé par le plafond « Achat » depuis la v1.21.0 (médiane − 300).
       p60Quantile: 0.6,
       ambitiousQuantile: 0.7,
       ambitiousMinSales: 8,
@@ -560,7 +559,7 @@
       'stats.quickQuantile': '« Vente rapide » = ce quantile des ventes (0,35 = P35) [0-1]',
       'stats.ambitiousMinSales': '« Ambitieux » à partir de (ventes)',
       'stats.ambitiousQuantile': '« Ambitieux » = ce quantile des ventes (0,7 = P70) [0-1]',
-      'stats.p60Quantile': 'P60 (base du plafond « Achat ») = ce quantile des ventes (0,6 = P60) [0-1]',
+      'stats.p60Quantile': 'P60 = ce quantile des ventes (0,6 = P60) [0-1]',
       'stats.confidence': 'Confiance faible sous, moyenne sous (ventes ; ventes)',
       'stats.memoMs': 'Conseils d’une carte recalculés au plus toutes les (ms)',
     }],
@@ -603,7 +602,7 @@
     ['Aide à l’achat (marché)', {
       'buy.resaleGap': 'Mise max pour revendre = « Normal » (s’il dépasse la vente rapide de plus de 100) ou vente rapide, moins (wikibidous)',
       'buy.resaleMedianAbove': 'Mise max pour revendre : « Normal » pris s’il dépasse la vente rapide de plus de (wikibidous)',
-      'buy.dealP60Gap': 'Plafond « Achat » (bot de l’ordinateur) : au moins (wikibidous) sous le P60',
+      'buy.dealMedianGap': 'Plafond « Achat » (bot de l’ordinateur) : sous la médiane de (wikibidous)',
       'buy.minRecentSales': 'Ni étoiles ni mise max sous (ventes sur la période 💤, 7 jours par défaut)',
       'buy.bidStep': 'Surenchère minimale (+0,1 = +10 %)',
       'buy.parallel': 'Pastilles : lectures simultanées au plus [>0]',
@@ -890,12 +889,12 @@
     return Math.max(0, cap);
   }
   const resaleCapOf = (quick, sales7, normal, median) => (quick != null && liquid(sales7) ? resaleFrom(quick, normal, median) : null);
-  // Mise max de l'achat des bonnes affaires (bot v1.10.0, dealMax) : plafond
-  // « Achat » de la surenchère qui suit une mise de l'achat.
-  function dealMax(quick, median, normal, p60) {
-    if (!Number.isFinite(quick) || !Number.isFinite(median) || !Number.isFinite(p60)) return null;
-    const under = Math.ceil(Math.min(median, Number.isFinite(normal) ? normal : median)) - 1;
-    return Math.max(0, Math.min(Math.round(quick), Math.round(p60) - CONFIG.buy.dealP60Gap, under));
+  // Mise max de l'achat des bonnes affaires (bot v1.11.0, dealMax) : plafond
+  // « Achat » de la surenchère qui suit une mise de l'achat ; médiane (entier
+  // inférieur) − dealMedianGap, jamais négative.
+  function dealMax(median) {
+    if (!Number.isFinite(median)) return null;
+    return Math.max(0, Math.floor(median) - CONFIG.buy.dealMedianGap);
   }
   const resaleNote = (quick, normal) => (Number.isFinite(normal) && normal - quick > CONFIG.buy.resaleMedianAbove
     ? `« Normal » ${fmtPrice(normal)} − ${CONFIG.buy.resaleGap}` : `vente rapide ${fmtPrice(quick)} − ${CONFIG.buy.resaleGap}`);
@@ -3761,7 +3760,7 @@
         // Comme la tablette (bot v1.8.12) : revente = palier de revente (Normal
         // − 300 si Normal dépasse la vente rapide de plus de 100, sinon vente
         // rapide − 300, sous la médiane), collection = médiane ; bot v1.10.0 :
-        // achat = dealMax (vente rapide, P60 − 400, sous la médiane), « Je la
+        // achat = dealMax (médiane − 300, bot v1.11.0), « Je la
         // veux ! » = Ambitieux (P70 dès 8 ventes, sinon médiane) ; rien si moins
         // de minRecentSales ventes en 7 jours ou rareté inconnue.
         const recentOk = !!a.rarity && b.enough && liquid(adv.sales7);
@@ -3769,7 +3768,7 @@
         const pr = adv.price && adv.price.enough ? adv.price : {};
         remote.caps.set(key, { at: Date.now(), n: b.n || 0, recent: adv.sales7 ?? 0, enough: recentOk,
           resale: recentOk ? resaleFrom(b.quick, normal, b.median) : null, collection: recentOk ? Math.floor(b.median) : null,
-          deal: recentOk ? dealMax(b.quick, b.median, normal, pr.p60) : null,
+          deal: recentOk ? dealMax(b.median) : null,
           want: recentOk ? (pr.ambitious != null ? pr.ambitious : Math.floor(b.median)) : null,
           median: b.enough ? b.median : null, shinyFallback: a.shiny && !useOwn, noRarity: !a.rarity });
       }).catch(() => {}).finally(() => remote.capsBusy.delete(key));

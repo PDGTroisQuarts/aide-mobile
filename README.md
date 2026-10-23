@@ -9,6 +9,9 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.21.0** (23/10, avec le bot de l'ordinateur v1.11.0) : plafond « Achat »
+au moins 300 sous la médiane (au lieu de 400 sous le P60).
+
 **v1.20.2** (21/10, avec le bot de l'ordinateur v1.10.2) : plafond « Achat »
 au moins 400 sous le P60 (au lieu de 500).
 

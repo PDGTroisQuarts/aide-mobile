@@ -242,11 +242,13 @@
     // et sa 10e dernière (critère d'avant, 7 jours ; 0 = pas utilisé).
     thinSales7d: 10,
     thinSpanDays: 0,
-    // Carte à défausser (pastille violette, défausse signalée sur la fiche) :
-    // jamais 🔥 ; 💤 sous thinWorthlessBelow ; sinon sous worthlessBelow ;
-    // toujours sans prix estimé (« – »). v1.15.0 : 💤 jusqu'à 200, sinon sous 100.
+    // Carte à défausser (pastille violette, défausse signalée sur la fiche),
+    // même règle que le nettoyage de l'ordinateur (v1.21.0) : jamais 🔥 ;
+    // fewSalesTotal ventes ou moins en tout jusqu'à fewSalesValueMax compris ;
+    // sinon sous worthlessBelow ; toujours sans prix estimé (« – »).
     worthlessBelow: 30,
-    thinWorthlessBelow: 100,
+    fewSalesTotal: 10,
+    fewSalesValueMax: 1000,
     // « Lancer plus tard » n'est proposé que pour un départ entre ces heures (Paris).
     wakeFromHour: 8,
     wakeToHour: 23,
@@ -595,7 +597,8 @@
       veryHotSales48h: '🔥🔥 « Se vend énormément » : au moins (ventes sur la même période)',
       'stats.hotHours': '🔥 : période comptée (heures)',
       worthlessBelow: 'À défausser (se vend normalement) : prix « Normal » sous (wikibidous)',
-      thinWorthlessBelow: 'À défausser si 💤 : prix « Normal » sous (wikibidous)',
+      fewSalesTotal: 'À défausser si peu vendue : au plus (ventes en tout)',
+      fewSalesValueMax: 'À défausser si peu vendue : prix « Normal » jusqu’à (wikibidous)',
       valueGreen: 'Pastille de la collection verte à partir de (wikibidous)',
       collectionSummaryHours: 'Collection : valeur relue si plus vieille que (heures)',
     }],
@@ -910,8 +913,11 @@
   // mesuré (résumé d'avant la v0.14), null = moins de 10 ventes.
   const isThin = (sales7, span10) => (sales7 != null && sales7 < CONFIG.thinSales7d)
     || (CONFIG.thinSpanDays > 0 && span10 !== undefined && (span10 === null || span10 > CONFIG.thinSpanDays));
+  // Peu vendue : au plus fewSalesTotal ventes en tout (rareté, version) ;
+  // total inconnu (résumé d'avant la v1.21.0) : non.
+  const fewSales = (total) => total != null && total <= CONFIG.fewSalesTotal;
   // Sans valeur : à défausser (fiche, nettoyage), pastille violette (sous UR).
-  const worthless = (normal, thin, hot = false) => !hot && (normal === null || normal < CONFIG.worthlessBelow || (thin && normal < CONFIG.thinWorthlessBelow));
+  const worthless = (normal, few, hot = false) => !hot && (normal === null || normal < CONFIG.worthlessBelow || (few && normal <= CONFIG.fewSalesValueMax));
   // Explication du 💤 (encarts, infobulles).
   const thinText = (sales7, span10) => `${sales7 ?? '?'} vente${sales7 > 1 ? 's' : ''} en ${CONFIG.stats.countDays} jours`
     + (CONFIG.thinSpanDays <= 0 ? '' : span10 === null ? `, moins de ${CONFIG.stats.spanSales} ventes en tout` : span10 !== undefined ? `, ${CONFIG.stats.spanSales} dernières ventes sur ${String(span10).replace('.', ',')} jours` : '');
@@ -941,6 +947,7 @@
     return {
       enough: true,
       n,
+      total: same.length,
       period,
       dropped,
       min: prices[0],
@@ -1413,7 +1420,7 @@
         const pa = a.enough ? priceAdvice(sales, rarity, now, shiny, pool) : null;
         r[shiny ? `${rarity}✦` : rarity] = a.enough
           ? [a.median, a.n, null, null, null, pa.normal, sales7d(sales, rarity, now, shiny), pa.quick,
-            span10d(sales, rarity, shiny) ?? -1, sales48h(sales, rarity, now, shiny)]
+            span10d(sales, rarity, shiny) ?? -1, sales48h(sales, rarity, now, shiny), pool.same.length]
           : [null, a.n];
       }
     }
@@ -1445,7 +1452,7 @@
     if (!e) return null;
     const stale = Date.now() - e.at > hours * 3600000;
     const v = e.r[rarity];
-    if (!v) return stale ? null : { median: null, n: 0, normal: null, t: e.t || null };
+    if (!v) return stale ? null : { median: null, n: 0, total: 0, normal: null, t: e.t || null };
     // Résumé d'avant la v0.8 (sans prix « Normal ») : à relire.
     if (v[0] !== null && v.length < 6) return null;
     // Résumé d'avant la v0.9.2 (sans ventes sur 7 jours) : affiché, et relu.
@@ -1453,6 +1460,8 @@
     // (plafond de l'ancien modèle en v[2]) suivent la nouvelle règle.
     return { median: v[0], n: v[1], resaleCap: resaleCapOf(v[7] ?? null, v[6] ?? null, v[5] ?? null, v[0]), normal: v[5] ?? null,
       sales7: v[6] ?? null, sales48: v.length >= 10 ? v[9] : undefined, quick: v[7] ?? null, span10: v[8] === undefined ? undefined : v[8] < 0 ? null : v[8],
+      // Ventes en tout (v1.21.0) ; « pas assez de ventes » : v[1].
+      total: v.length >= 11 ? v[10] : v[0] === null ? v[1] : null,
       stale: stale || (v[0] !== null && v.length < 7), t: e.t || null };
   }
 
@@ -2291,8 +2300,8 @@
         const thin = isThin(state.sales7, state.span10);
         if (advice.normal < CONFIG.worthlessBelow) {
           body += discardRow(`« Normal » à ${fmtPrice(advice.normal)} : moins de ${CONFIG.worthlessBelow} wikibidous`);
-        } else if (thin && advice.normal < CONFIG.thinWorthlessBelow) {
-          body += discardRow(`💤 Se vend peu (${thinText(state.sales7, state.span10)}) pour ${fmtPrice(advice.normal)} wikibidous`);
+        } else if (fewSales(advice.total) && advice.normal <= CONFIG.fewSalesValueMax) {
+          body += discardRow(`Peu vendue (${advice.total} vente${advice.total > 1 ? 's' : ''} en tout) pour ${fmtPrice(advice.normal)} wikibidous`);
         } else if (thin) {
           body += `<div class="wv-tip">💤 Se vend peu : ${esc(thinText(state.sales7, state.span10))}.</div>`;
         }
@@ -2822,8 +2831,8 @@
   const DISCARD_COLOR = CONFIG.colors.discard;
   // v1.15.0 : UR comprise (comme le nettoyage de l'aide v0.32.0), jamais L.
   const discardRarity = (rarity) => RARITIES.indexOf(rarity) >= 0 && RARITIES.indexOf(rarity) < RARITIES.indexOf('L');
-  function valueColor(price, thin = false, rarity = null, hot = false) {
-    if (worthless(price, thin, hot) && discardRarity(rarity)) return DISCARD_COLOR;
+  function valueColor(price, few = false, rarity = null, hot = false) {
+    if (worthless(price, few, hot) && discardRarity(rarity)) return DISCARD_COLOR;
     const t = price == null ? 0 : Math.min(1, Math.max(0, (price - CONFIG.worthlessBelow) / (CONFIG.valueGreen - CONFIG.worthlessBelow)));
     const C = CONFIG.colors;
     return `hsl(${Math.round(C.hueLow + t * (C.hueHigh - C.hueLow))}, ${C.valueSaturation}%, ${Math.round(C.valueLightness - Math.sin(t * Math.PI) * C.valueDip)}%)`;
@@ -3183,7 +3192,7 @@
         const thin = isThin(sum.sales7, sum.span10);
         const quick = sum.quick != null ? sum.quick : sum.normal;
         text = `${thin ? '💤 ' : isHot(sum.sales48) ? `${hotMark(sum.sales48)} ` : ''}${fmtPrice(quick)}`;
-        bg = valueColor(quick, thin, shiny ? null : rarity, isHot(sum.sales48));
+        bg = valueColor(quick, fewSales(sum.total), shiny ? null : rarity, isHot(sum.sales48));
         tip = `${head} : vente rapide estimée à ${fmtPrice(quick)} wikibidous · normale ${fmtPrice(sum.normal)}`
           + `${sum.median != null ? ` · médiane ${fmtPrice(sum.median)}` : ''} (${thinText(sum.sales7, sum.span10)})`
           + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. ${hotMark(sum.sales48)} Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.');
@@ -3191,10 +3200,10 @@
       } else {
         const thin = isThin(sum.sales7, sum.span10);
         text = `${thin ? '💤 ' : isHot(sum.sales48) ? `${hotMark(sum.sales48)} ` : ''}${fmtPrice(sum.normal)}`;
-        bg = valueColor(sum.normal, thin, shiny ? null : rarity, isHot(sum.sales48));
-        tip = `${head} : vente « Normal » estimée à ${fmtPrice(sum.normal)} wikibidous (${thinText(sum.sales7, sum.span10)})`
+        bg = valueColor(sum.normal, fewSales(sum.total), shiny ? null : rarity, isHot(sum.sales48));
+        tip = `${head} : vente « Normal » estimée à ${fmtPrice(sum.normal)} wikibidous (${thinText(sum.sales7, sum.span10)}${sum.total != null ? `, ${sum.total} en tout` : ''})`
           + (thin ? '. 💤 Se vend peu.' : isHot(sum.sales48) ? `. ${hotMark(sum.sales48)} Se vend beaucoup (${sum.sales48} ventes en ${CONFIG.stats.hotHours} h).` : '.')
-          + (worthless(sum.normal, thin, isHot(sum.sales48)) && discardRarity(rarity) ? ' → à défausser.' : '');
+          + (worthless(sum.normal, fewSales(sum.total), isHot(sum.sales48)) && discardRarity(rarity) ? ' → à défausser.' : '');
       }
       let b = cardBadges.get(face);
       if (!b) {

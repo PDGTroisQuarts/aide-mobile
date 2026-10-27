@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.21.0
+// @version      1.22.0
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -2143,19 +2143,30 @@
     #wv-panel .wv-shop-row { flex-wrap: wrap; }
     #wv-panel .wv-shop-row button { border: 0; border-radius: 8px; min-height: 34px; padding: 0 12px; font: inherit; font-size: 12px;
       background: rgba(255,255,255,.08); color: #e4e4e7; }
-    #wv-panel .wv-shop-row button.on { background: #f472b6; color: #18181b; font-weight: 700; }
+    /* « ❤ Je la veux ! » : interrupteur bordé (état écrit : oui / non) ;
+       « Ajouter … » : boutons pleins qui envoient. */
+    #wv-panel .wv-shop-row button[data-shopwant] { background: transparent; border: 1px solid rgba(255,255,255,.28); font-weight: 600; }
+    #wv-panel .wv-shop-row button[data-shopwant].on { background: #f472b6; border-color: transparent; color: #18181b; font-weight: 700; }
+    #wv-panel .wv-shop-row button[data-shop] { background: #38bdf8; color: #0b0b0e; font-weight: 700; }
+    #wv-panel .wv-shop-row .wv-err, #wv-panel .wr-err { color: #fca5a5; }
+    #wv-panel .wv-sum .wr-over-n { color: #f87171; }
     #wv-panel button.wv-gear { border: 0; border-radius: 8px; min-height: 32px; padding: 0 12px; font: inherit; font-size: 12px;
       background: rgba(255,255,255,.08); color: #e4e4e7; }
   `;
   document.head.appendChild(style);
   document.body.appendChild(panel);
-  // Bouton ⚙ en bas du détail du bandeau : fenêtre des réglages (le menu
-  // Tampermonkey est peu commode sur Android).
-  const gearRow = '<div class="wv-status wv-gear-row"><button type="button" class="wv-gear">⚙ Réglages</button></div>';
+  // Boutons en bas du détail du bandeau : tableau de bord et fenêtre des
+  // réglages (le menu Tampermonkey est peu commode sur Android).
+  const gearRow = '<div class="wv-status wv-gear-row"><button type="button" class="wv-gear" data-dash="1">Tableau de bord</button>'
+    + '<button type="button" class="wv-gear">⚙ Réglages</button></div>';
   // Réduit par défaut : une ligne avec l'essentiel.
   panel.classList.toggle('wv-min', GM_getValue(KEY_MINIMIZED, true));
   panel.classList.toggle('wv-top', GM_getValue(KEY_TOP, false));
   panel.addEventListener('click', (e) => {
+    if (e.target.closest('button[data-dash]')) {
+      openDashboard();
+      return;
+    }
     if (e.target.closest('button.wv-gear')) {
       settings.open();
       return;
@@ -2336,7 +2347,7 @@
     panel.style.display = 'block';
     panel.dataset.mode = 'global';
     panel.innerHTML = `<header><span class="wv-title">${esc(g.title)}</span>${pill}<span class="wv-sum">🛒</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
-      + `<div class="wv-body"><div class="wv-status">Shopping : mise sous la médiane (❤ Je la veux ! : sous P70 ; x1 🔥 : prix de revente 2 jours, puis médiane), sans prix maximum ; ajoutée sur tous les appareils.</div>${shopRow(g.title, g.rarity)}${gearRow}</div>`;
+      + `<div class="wv-body">${shopRow(g.title, g.rarity)}${gearRow}</div>`;
   }
   async function tick() {
     if (busy || document.hidden) return;
@@ -3548,15 +3559,16 @@
   const capsKey = (a) => `${a.cardId}|${a.rarity}|${a.shiny ? 1 : 0}`;
   const rTopic = () => GM_getValue(KEY_R_TOPIC, '');
   const rSyncTopic = () => (rTopic() ? `${rTopic()}-encheres` : '');
+  // sendFailed : enchères dont le dernier choix de plafond n'a pas pu partir.
   const remote = { followed: [], readAt: 0, nextRead: 0, reading: false, status: '', syncStatus: '—', nextSync: 0, syncing: false,
-    caps: new Map(), capsBusy: new Set(), touchedAt: 0, lastHtml: '' };
+    caps: new Map(), capsBusy: new Set(), touchedAt: 0, lastHtml: '', sendFailed: new Set() };
   // Sur toutes les pages du marché, sauf la page d'une enchère (où s'affiche
   // l'aide à l'achat). Sans sujet ntfy, le bandeau propose de l'activer.
   const remoteShown = () => location.pathname.startsWith('/marketplace') && !AUCTION_PATH.test(location.pathname)
     && (!!rTopic() || !GM_getValue('wr.off', false));
   function remoteSetup() {
-    const answer = prompt('Télécommande des enchères : nom du sujet ntfy du bot de surenchère (le même que sur la tablette : '
-      + 'menu du bot de surenchère → « Notifications téléphone »).\nVide pour désactiver.', rTopic());
+    const answer = prompt('Sujet ntfy : le même que sur la tablette et l’ordinateur (menu Tampermonkey → « Notification : Régler »).\n'
+      + 'Il sert à la télécommande, au shopping et au tableau de bord. Vide pour désactiver.', rTopic());
     if (answer === null) return;
     const topicName = answer.trim().replace(/[^A-Za-z0-9_-]/g, '');
     GM_setValue(KEY_R_TOPIC, topicName);
@@ -3633,8 +3645,9 @@
   // shopping par « <sujet>-commande » (même sujet que la télécommande), pour
   // les deux appareils (« * ») ; l'appareil l'ajoute à sa prochaine relève
   // (1 min environ). Liste complète, retraits : tableau de bord (menu).
-  // « ❤ Je la veux ! » (v1.20.0, bot v1.10.0) : bascule avant x1 / En continu ;
-  // le bot misera alors jusqu'à P70 (« Ambitieux ») au lieu de la médiane.
+  // « ❤ Je la veux ! » (v1.20.0, bot v1.10.0) : interrupteur (état écrit : oui
+  // / non) avant « Ajouter x1 » / « Ajouter en continu » ; le bot misera alors
+  // jusqu'à P70 (« Ambitieux ») au lieu de la médiane.
   // L'état vit ici (l'encart est redessiné en entier), pour la carte affichée.
   const shopState = { key: '', at: 0, ok: false, wantKey: '', want: false };
   const shopWantOn = (key) => shopState.wantKey === key && shopState.want;
@@ -3643,21 +3656,23 @@
     const r = rarity || '';
     const key = `${simplify(title)}|${r}`;
     const sent = shopState.key === key && Date.now() - shopState.at < 10 * 60000;
-    const note = !sent ? '' : shopState.ok ? 'demande envoyée : ajoutée à la liste du bot dans 1 min environ'
-      : 'demande non envoyée (ntfy.sh ne répond pas) : réessaie';
+    const note = !sent ? '' : shopState.ok ? 'Envoyé : ajoutée à la liste dans 1 min environ.'
+      : 'Non envoyé : ntfy.sh ne répond pas. Réessaie.';
     const want = shopWantOn(key);
     const b = (mode, label) => `<button type="button" data-shop="${mode}" data-title="${esc(title)}" data-rarity="${esc(r)}">${label}</button>`;
-    const w = `<button type="button" data-shopwant="${want ? 0 : 1}" data-title="${esc(title)}" data-rarity="${esc(r)}" aria-pressed="${want}" class="${want ? 'on' : ''}">❤ Je la veux !</button>`;
-    return `<div class="wv-status wv-shop-row"><span>🛒 Shopping${r ? ` (${esc(r)})` : ''} :</span>${w}${b('one', 'x1')}${b('loop', 'En continu')}${note ? `<span>${esc(note)}</span>` : ''}</div>`;
+    const w = `<button type="button" data-shopwant="${want ? 0 : 1}" data-title="${esc(title)}" data-rarity="${esc(r)}" aria-pressed="${want}" class="${want ? 'on' : ''}">❤ Je la veux ! : ${want ? 'oui' : 'non'}</button>`;
+    return `<div class="wv-status wv-shop-row"><span>🛒 Shopping${r ? ` (${esc(r)})` : ''} :</span>${w}${b('one', 'Ajouter x1')}${b('loop', 'Ajouter en continu')}${note ? `<span class="${shopState.ok ? '' : 'wv-err'}">${esc(note)}</span>` : ''}</div>`;
   }
   async function shopAsk(title, rarity, mode, want = false) {
+    // Sans sujet : la fenêtre du sujet dit à quoi il sert.
     if (!rTopic()) {
-      alert('Shopping : il faut d’abord le sujet ntfy de l’ordinateur (le même que sur la tablette et l’ordinateur).');
       remoteSetup();
       if (!rTopic()) return;
     }
     const what = `« ${title} »${rarity ? ` (${rarity})` : ' (toutes raretés)'} ${mode === 'loop' ? 'en continu' : 'une fois (x1)'}`;
-    const how = want ? 'jusqu’à P70 (« Ambitieux » ; médiane sous 8 ventes), la surenchère suivant jusqu’à P70' : 'sous la médiane (x1 🔥 / 🔥🔥 : au plus le prix de revente pendant 2 jours, puis la médiane ; jusqu’à P70 si la carte est déjà en « Je la veux ! » : ce choix reste tel quel)';
+    // Plafond seulement (P70 dit « Ambitieux », comme l'aide) ; un ajout sans
+    // « Je la veux ! » laisse ce choix tel quel pour une carte déjà là.
+    const how = want ? 'jusqu’au prix « Ambitieux »' : 'sous la médiane (jusqu’au prix « Ambitieux » si la carte est déjà en « Je la veux ! »)';
     if (!confirm(`Ajouter ${what}${want ? ' en « Je la veux ! »' : ''} à la liste du bot shopping ?\n\nLe bot misera ${how}, sans prix maximum (solde gardé au-dessus de 10 000).`)) return;
     const id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
     const message = JSON.stringify({ t: 'shop', op: 'add', d: '*', n: String(title).slice(0, 80), r: rarity || '', m: mode === 'loop' ? 'loop' : 'one', ...(want ? { w: 1 } : {}), at: Date.now(), id });
@@ -3720,10 +3735,17 @@
       const c = a ? remote.caps.get(capsKey(a)) : null;
       const median = c ? c.median : null;
       const ratio = median ? ` (médiane ${fmtPrice(median)}, soit ×${(value / median).toFixed(1).replace('.', ',')})` : '';
-      if (!confirm(`Plafond pour « ${title} » : ${fmtPrice(value)} wikibidous${ratio}.\n\nLa tablette pourra miser jusqu’à ce montant. Confirmer ?`)) return;
+      if (!confirm(`Plafond pour « ${title} » : ${fmtPrice(value)} wikibidous${ratio}.\n\nLe bot de surenchère pourra miser jusqu’à ce montant. Confirmer ?`)) return;
     }
     rSetMode(id, value, Date.now());
-    rPublish(id, value);
+    remote.sendFailed.delete(id);
+    // Envoi raté : dit sous l'enchère (le choix reste noté ici, à renvoyer).
+    Promise.resolve(rPublish(id, value)).then((res) => {
+      if (res !== null) return;
+      remote.sendFailed.add(id);
+      remote.touchedAt = 0;
+      render();
+    });
     remote.touchedAt = 0;
     render();
   }
@@ -3827,14 +3849,17 @@
         <div class="wr-s">Mise ${fmtPrice(a.current ?? a.base)} · ${lead ? 'tu es en tête' : `en tête : ${esc(a.leaderName || '—')}`} · prochaine ≥ ${fmtPrice(next)}</div>
         <div class="wr-s">Plafond ${cap == null ? '—' : fmtPrice(cap)}${over ? ' · dépassé' : ''}${capNote}</div>
         <div class="wr-modes">${mode === 'deal' ? btn('deal', `Achat${c && c.deal != null ? ` ${fmtPrice(c.deal)}` : ''}`) : ''}${mode === 'want' ? btn('want', `Je la veux !${c && c.want != null ? ` ${fmtPrice(c.want)}` : ''}`) : ''}${btn('resale', `Revente${c && c.resale != null ? ` ${fmtPrice(c.resale)}` : ''}`)}${btn('collection', `Collec.${c && c.collection != null ? ` ${fmtPrice(c.collection)}` : ''}`)}${btn('manual', mode === 'manual' ? `Manuel ${fmtPrice(cap)}` : 'Manuel…')}${btn('off', 'Arrêt')}</div>
+        ${remote.sendFailed.has(a.id) ? '<div class="wr-s wr-err">Choix non envoyé (ntfy.sh ne répond pas) : touche-le de nouveau.</div>' : ''}
       </div>`;
     }).join('');
     const soonest = list.find((a) => a.end > Date.now());
-    const summary = `${list.length} enchère${list.length > 1 ? 's' : ''}${soonest ? ` · <span class="wr-left" data-end="${soonest.end}"></span>` : ''}`;
+    // Bandeau replié : les enchères au plafond dépassé, seule raison d'agir.
+    const overN = list.filter((a) => a.end > Date.now() && overCap(a)).length;
+    const summary = `${list.length} enchère${list.length > 1 ? 's' : ''}${overN ? ` · <span class="wr-over-n">${overN} dépassée${overN > 1 ? 's' : ''}</span>` : ''}${soonest ? ` · <span class="wr-left" data-end="${soonest.end}"></span>` : ''}`;
     const html = `<header><span class="wv-title">Mes enchères</span><span class="wv-sum">${summary}</span><span class="wv-chevron">${panel.classList.contains('wv-min') ? '▴' : '▾'}</span></header>`
       + `<div class="wv-body">${rows || '<div class="wv-status">Aucune enchère en cours où tu as misé.</div>'}`
       + `${remote.status ? `<div class="wv-status">${esc(remote.status)}</div>` : ''}`
-      + `<div class="wv-status">Télécommande : les choix partent vers la tablette (prise en compte en moins d’une minute). Synchro : ${esc(remote.syncStatus)}.</div>${gearRow}</div>`;
+      + `<div class="wv-status">Tes choix vont au bot de surenchère en moins d’1 min. Dernière relève : ${esc(remote.syncStatus)}.</div>${gearRow}</div>`;
     panel.style.display = 'block';
     if ((html !== remote.lastHtml || panel.dataset.mode !== 'remote') && Date.now() - remote.touchedAt > CONFIG.remote.touchPauseMs) {
       const body = panel.querySelector('.wv-body');
@@ -3854,11 +3879,13 @@
     panel.addEventListener(type, () => { remote.touchedAt = Date.now(); }, { passive: true, capture: true });
   }
 
-  // Tableau de bord (état des bots, liste de shopping : ajout et retrait).
-  GM_registerMenuCommand('Tableau de bord (bots, liste de shopping)', () => {
+  // Tableau de bord (état des bots, liste de shopping : ajout et retrait) :
+  // menu et bouton du bandeau, sujet de la télécommande dans l'adresse.
+  function openDashboard() {
     const t = rTopic();
     window.open(`https://raw.githack.com/PDGTroisQuarts/aide-mobile/main/tableau-de-bord.html${t ? `#${encodeURIComponent(t)}` : ''}`, '_blank', 'noopener');
-  });
+  }
+  GM_registerMenuCommand('Tableau de bord (bots, liste de shopping)', openDashboard);
   GM_registerMenuCommand(`Télécommande des enchères : ${rTopic() ? 'régler' : 'activer'}`, () => {
     remoteSetup();
     alert(rTopic() ? `Télécommande activée (sujet ${rTopic()}). Elle s’affiche sur la page du marché.` : 'Télécommande désactivée.');

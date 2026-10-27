@@ -3,13 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Appareils Wiki Masters</title>
+<title>Tableau de bord Wiki Masters</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
   /* Pupitre de contrôle : deux appareils côte à côte (empilés sur téléphone),
-     une ligne par bot, l'état en pastille à droite, l'action juste dessous. */
+     une ligne par bot, l'état en pastille à droite, l'action juste dessous.
+     Pastilles comme les encarts du bot : on (En cours) vert, wait (En attente,
+     En veille) bleu, pause (repart seul) jaune, act (geste attendu) orange,
+     stop (Arrêté) rouge, off gris. */
   :root {
     --bg: #eef1f4;
     --panel: #ffffff;
@@ -20,8 +23,12 @@
     --accent-ink: #ffffff;
     --on: #1f7a3f;
     --on-bg: #e2f3e8;
-    --wait: #8a5300;
-    --wait-bg: #fdefd5;
+    --wait: #1d5fa8;
+    --wait-bg: #e1edfb;
+    --pause: #765a00;
+    --pause-bg: #faf0c4;
+    --act: #a24600;
+    --act-bg: #fde2cc;
     --stop: #a3272f;
     --stop-bg: #fbe3e4;
     --off: #5d6b78;
@@ -35,16 +42,16 @@
     :root:not([data-theme="light"]) {
       --bg: #0f151b; --panel: #172029; --line: #2a3642; --ink: #e6edf3; --muted: #93a3b3;
       --accent: #3fb6c2; --accent-ink: #0b1a1d;
-      --on: #6fd394; --on-bg: #163222; --wait: #f2b55e; --wait-bg: #3a2a10;
-      --stop: #f08a8f; --stop-bg: #3d1a1d; --off: #93a3b3; --off-bg: #222c36; --focus: #3fb6c2;
+      --on: #6fd394; --on-bg: #163222; --wait: #8fbef5; --wait-bg: #15273d; --pause: #f0d264; --pause-bg: #33290a;
+      --act: #f7a35c; --act-bg: #3d2310; --stop: #f08a8f; --stop-bg: #3d1a1d; --off: #93a3b3; --off-bg: #222c36; --focus: #3fb6c2;
       color-scheme: dark;
     }
   }
   :root[data-theme="dark"] {
     --bg: #0f151b; --panel: #172029; --line: #2a3642; --ink: #e6edf3; --muted: #93a3b3;
     --accent: #3fb6c2; --accent-ink: #0b1a1d;
-    --on: #6fd394; --on-bg: #163222; --wait: #f2b55e; --wait-bg: #3a2a10;
-    --stop: #f08a8f; --stop-bg: #3d1a1d; --off: #93a3b3; --off-bg: #222c36; --focus: #3fb6c2;
+    --on: #6fd394; --on-bg: #163222; --wait: #8fbef5; --wait-bg: #15273d; --pause: #f0d264; --pause-bg: #33290a;
+    --act: #f7a35c; --act-bg: #3d2310; --stop: #f08a8f; --stop-bg: #3d1a1d; --off: #93a3b3; --off-bg: #222c36; --focus: #3fb6c2;
     color-scheme: dark;
   }
   * { box-sizing: border-box; }
@@ -85,12 +92,15 @@
   .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .pill.on { color: var(--on); background: var(--on-bg); }
   .pill.wait { color: var(--wait); background: var(--wait-bg); }
+  .pill.pause { color: var(--pause); background: var(--pause-bg); }
+  .pill.act { color: var(--act); background: var(--act-bg); }
   .pill.stop { color: var(--stop); background: var(--stop-bg); }
   .pill.off { color: var(--off); background: var(--off-bg); }
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
   .btn { appearance: none; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font: 600 15px/1 var(--font-ui); padding: 12px 18px; min-height: 44px; cursor: pointer; }
   .btn:disabled { background: var(--off-bg); color: var(--muted); cursor: default; }
-  .btn:focus-visible, .link:focus-visible, input:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  a.btn { display: inline-flex; align-items: center; text-decoration: none; }
+  .btn:focus-visible, .link:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
   .empty { padding: 14px 16px; color: var(--muted); font-size: 14px; }
   [hidden] { display: none !important; }
   .setup { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 16px; display: grid; gap: 12px; max-width: 560px; }
@@ -99,11 +109,14 @@
   .field { display: flex; flex-wrap: wrap; gap: 10px; }
   .field input { flex: 1 1 220px; min-width: 0; font: 500 16px/1.2 var(--font-num); padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
   .error { color: var(--stop); font-size: 14px; font-weight: 500; }
+  .detail.error { color: var(--stop); }
   footer { color: var(--muted); font-size: 12px; }
   /* Liste de shopping (v1.8.6) : une ligne par carte, retrait à droite ; ajout en bas. */
   .shop { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; min-width: 0; }
   .shop .items { list-style: none; margin: 0; padding: 0; }
-  .shop .item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); min-width: 0; }
+  .shop .item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); min-width: 0; }
+  /* Téléphone : boutons sous le nom plutôt que le nom écrasé. */
+  .shop .item > div:first-child { flex: 1 1 160px; min-width: 0; }
   .shop .item:first-child { border-top: 0; }
   .shop .iname { font-weight: 600; overflow-wrap: anywhere; }
   .shop .add { display: grid; gap: 10px; padding: 14px 16px; border-top: 1px solid var(--line); }
@@ -111,9 +124,11 @@
   .shop .add input, .shop .add select { font: 500 16px/1.2 var(--font-ui); padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-height: 44px; }
   .shop .add input { flex: 1 1 220px; min-width: 0; }
   .btn.ghost { background: var(--off-bg); color: var(--ink); padding: 10px 14px; min-height: 40px; }
-  /* « Je la veux ! » (v1.10.0) : bouton bascule par carte, case à l'ajout. */
-  .shop .acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-  .btn.ghost.want[aria-pressed="true"] { background: var(--on-bg); color: var(--on); outline: 2px solid var(--on); outline-offset: -2px; }
+  /* « Je la veux ! » (v1.10.0) : interrupteur par carte (☐ / ☑, bordé : pas
+     l'air d'un bouton d'envoi), case à l'ajout avant « Ajouter ». */
+  .shop .acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-left: auto; }
+  .btn.ghost.want { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+  .btn.ghost.want[aria-pressed="true"] { background: var(--on-bg); color: var(--on); box-shadow: inset 0 0 0 2px var(--on); }
   .shop .add .want { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 500; }
   .shop .add .want input { width: 22px; height: 22px; min-height: 0; flex: none; accent-color: var(--accent); }
   @media (prefers-reduced-motion: no-preference) { .btn { transition: filter .15s; } .btn:not(:disabled):hover { filter: brightness(1.08); } }
@@ -123,7 +138,7 @@
 <div class="wrap">
   <header>
     <div class="brand">Wiki Masters</div>
-    <h1>Appareils</h1>
+    <h1>Tableau de bord</h1>
     <div class="meta" id="meta"></div>
   </header>
   <div id="alert" class="alert" role="status" hidden></div>
@@ -138,7 +153,7 @@
   </section>
   <main id="devices" class="devices" aria-live="polite"></main>
   <section id="shop" class="shop" hidden aria-live="polite"></section>
-  <footer id="foot" hidden>L’appareil principal envoie son état toutes les 15 minutes, le relais toutes les 30 minutes, et chacun à chaque changement. Sans nouvelles de l’appareil principal depuis 30 minutes, le relais prend la main.</footer>
+  <footer id="foot" hidden>États envoyés à chaque changement, et au moins toutes les 15 min (principal) ou 30 min (relais). Sans nouvelles du principal depuis 30 min, le relais prend la main.</footer>
 </div>
 <script>
 (() => {
@@ -149,11 +164,13 @@
   const offlineMs = (st) => (Math.max(30, 2 * (Number(st.beat) || 15)) + 2) * 60000;
   const RESEND_MS = 3 * 60000;
   const DEVICES = [['tablette', 'Tablette'], ['ordinateur', 'Ordinateur']];
-  const BOTS = [['boosters', 'Bot booster'], ['surenchere', 'Bot surenchère'], ['achat', 'Bot bonnes affaires'], ['shopping', 'Bot shopping'], ['vente', 'Bot vente automatique'], ['nettoyage', 'Bot nettoyage']];
+  // Noms courts des bots, comme dans l'encart et le menu (BOTS[bot].short).
+  const BOTS = [['boosters', 'Boosters'], ['surenchere', 'Surenchère'], ['achat', 'Bonnes affaires'], ['shopping', 'Shopping'], ['vente', 'Vente auto'], ['nettoyage', 'Nettoyage']];
   // Révision de cette page : l'appareil en attend une plus récente (champ
   // « tb » de son état) → page gardée en cache par le navigateur
   // (avertissement). À monter avec CONFIG.devices.dashboardRev du script.
-  const PAGE_REV = 5;
+  const PAGE_REV = 6;
+  const SITE = 'https://www.wiki-masters.com/';
   const RARITIES = ['L', 'UR', 'SR', 'R', 'PC', 'C'];
   // Bots de l'état reçu : ceux de la page, puis ceux qu'elle ne connaît pas
   // encore (bot plus récent que la page) ; ancien nom du shopping (v1.7).
@@ -162,9 +179,12 @@
     if (bots.outerwilds && !bots.shopping) bots.shopping = bots.outerwilds;
     delete bots.outerwilds;
     const known = new Set(BOTS.map(([b]) => b));
-    return [...BOTS.map(([b, label]) => [b, label, bots[b]]), ...Object.keys(bots).filter((b) => !known.has(b)).map((b) => [b, `Bot ${b}`, bots[b]])];
+    return [...BOTS.map(([b, label]) => [b, label, bots[b]]), ...Object.keys(bots).filter((b) => !known.has(b)).map((b) => [b, b, bots[b]])];
   }
-  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, polling: false, shopSent: {}, shopNote: '', shopWant: false };
+  // sentErr : « Relancer » non envoyé (par bot). shopNote : retour du dernier
+  // envoi du shopping { text, at, err, done(list) } ; shopDraft : carte en
+  // cours d'ajout, gardée tant que l'envoi n'a pas réussi.
+  const state = { topic: '', since: '12h', devices: {}, lastOk: 0, error: '', sent: {}, sentErr: {}, polling: false, shopSent: {}, shopNote: null, shopWant: false, shopDraft: { n: '', r: '', m: 'one' } };
   const $ = (id) => document.getElementById(id);
   const store = {
     get() { try { return localStorage.getItem('wm.sujet') || ''; } catch (err) { return ''; } },
@@ -216,7 +236,7 @@
       state.lastOk = Date.now();
       state.error = '';
     } catch (err) {
-      state.error = `ntfy.sh ne répond pas (${err.message}) : nouvel essai dans quelques secondes.`;
+      state.error = 'ntfy.sh ne répond pas : nouvel essai dans quelques secondes.';
     } finally {
       state.polling = false;
       render();
@@ -247,39 +267,55 @@
   async function relaunch(d, bot, btn) {
     btn.disabled = true;
     btn.textContent = 'Envoi…';
+    const key = `${d}|${bot}`;
     try {
       await sendCommand({ t: 'relancer', d, bot });
-      state.sent[`${d}|${bot}`] = Date.now();
-      state.error = '';
+      state.sent[key] = Date.now();
+      delete state.sentErr[key];
     } catch (err) {
-      state.error = `Demande non envoyée : ntfy.sh ne répond pas (${err.message}). Réessaie.`;
+      // Échec dit sous le bouton, qui reste disponible.
+      state.sentErr[key] = Date.now();
     }
     render();
   }
 
   // --- Affichage ----------------------------------------------------------------
+  // Bot en marche : le libellé de son encart (x) dans la pastille, même mot et
+  // même couleur que sur l'appareil.
+  const PAUSE_LABELS = ['En pause', 'Solde bas'];
+  const WAIT_LABELS = ['En attente', 'En veille', 'Relais', 'Télécommande'];
+  const onView = (x) => ({ pill: PAUSE_LABELS.includes(x) ? 'pause' : WAIT_LABELS.includes(x) ? 'wait' : 'on', label: x || 'ON', text: '' });
+  // Connexion : automatique tant que le navigateur remplit les champs (x :
+  // état de la connexion de l'appareil, mêmes mots que loginNeedsUser).
+  function loginView(x) {
+    if (/impossible|remplis|plus d’essai/.test(x)) return { pill: 'act', label: 'À faire', text: 'Connecte-toi sur l’appareil : la connexion automatique n’a pas marché.' };
+    if (/coche/.test(x)) return { pill: 'act', label: 'À faire', text: 'Coche la case de la page de connexion, sur l’appareil : la connexion repart ensuite.' };
+    return { pill: 'pause', label: 'Connexion', text: 'Session expirée : reconnexion automatique si le navigateur a gardé le mot de passe, sinon connecte-toi sur l’appareil.' };
+  }
   function botView(bot, b) {
     const s = (b && b.s) || 'off';
     const x = (b && b.x) || '';
-    if (bot === 'nettoyage') return s === 'off' ? { pill: 'off', label: 'OFF', text: x } : { pill: 'on', label: 'ON', text: '' };
+    // OFF avec un texte : bot activé dont l'onglet ne donne plus signe de vie.
+    if (s === 'off') return x ? { pill: 'act', label: 'Sans nouvelles', text: 'Onglet fermé ou endormi : ouvre-le sur l’appareil.' } : { pill: 'off', label: 'OFF', text: '' };
+    if (bot === 'nettoyage') return s === 'on' ? onView(x) : { pill: 'on', label: 'ON', text: '' };
     switch (s) {
-      case 'on': return { pill: 'on', label: 'ON', text: x };
-      case 'antibot': return { pill: 'wait', label: 'Anti-bot', text: 'Refus anti-bot du site : nouvel essai automatique', until: b.r, relaunch: true };
+      case 'on': return onView(x);
+      case 'antibot': return { pill: 'pause', label: 'En pause', text: 'Le site a refusé une action : nouvel essai automatique', until: b.r, relaunch: true };
       case 'stopped': return b.r
-        ? { pill: 'stop', label: 'Arrêt', text: 'Arrêt de sécurité : reprise automatique', until: b.r, relaunch: true, note: x }
+        ? { pill: 'pause', label: 'En pause', text: 'Arrêt de sécurité : reprise automatique', until: b.r, relaunch: true, note: x }
         : { pill: 'stop', label: 'Arrêté', text: x || 'Arrêté' };
       case 'human': return /rapide/i.test(x)
-        ? { pill: 'wait', label: 'Vérification', text: 'Vérification rapide du site en cours : elle se fait seule' }
-        : { pill: 'wait', label: 'À vérifier', text: 'Case à cocher : coche-la (depuis n’importe quel appareil) ; page rechargée toutes les 30 s' };
-      case 'login': return { pill: 'wait', label: 'Connexion', text: 'Connexion requise sur l’appareil' };
+        ? { pill: 'pause', label: 'En pause', text: 'Vérification rapide du site en cours : rien à faire, le bot reprendra ensuite.' }
+        : { pill: 'act', label: 'À faire', text: 'Coche la case sur le site, depuis n’importe quel appareil : le bot repart seul dans la minute.', site: true };
+      case 'login': return loginView(x);
       default: return { pill: 'off', label: 'OFF', text: x };
     }
   }
   function roleText(st, name) {
     const other = name === 'Tablette' ? 'l’ordinateur' : 'la tablette';
-    const main = st.role === 'relais' ? (st.relais ? `Relais — a pris la main (${other} ne répond plus)` : 'Relais') : 'Principal';
+    const main = st.role === 'relais' ? (st.relais ? `relais, a pris la main (${other} ne répond plus)` : 'relais') : 'principal';
     const bid = st.ench === 'telecommande' ? (st.enchRelais ? `télécommande, mise à la place de ${other}` : 'télécommande') : 'mise';
-    return [main, `Surenchère : ${bid}`];
+    return [`Boosters : ${main}`, `Surenchère : ${bid}`];
   }
   function deviceCard(d, name) {
     const st = state.devices[d];
@@ -288,7 +324,7 @@
     const row = el('div', 'drow');
     row.append(el('h2', 'dname', name));
     const online = st && Date.now() - st.at < offlineMs(st);
-    row.append(el('span', `pill ${online ? 'on' : 'off'}`, online ? 'En ligne' : 'Hors-ligne'));
+    row.append(el('span', `pill ${online ? 'on' : 'off'}`, online ? 'En ligne' : 'Hors ligne'));
     head.append(row);
     if (!st) {
       head.append(el('div', 'seen', 'Aucun état reçu depuis 12 h.'));
@@ -301,14 +337,16 @@
     const role = el('div', 'role');
     const strong = el('b', null, main);
     role.append(strong, document.createTextNode(` · ${bid}`));
-    head.append(role, el('div', 'seen', `Dernier signe ${ago(st.at)} (${clock(st.at)})${online ? '' : ' · états au dernier signe'}${st.v ? ` · v${st.v}` : ''}`));
+    head.append(role, el('div', 'seen', online ? `Dernier signe ${ago(st.at)} (${clock(st.at)})${st.v ? ` · v${st.v}` : ''}`
+      : `Sans nouvelles depuis ${clock(st.at)} (${ago(st.at)}) : états d’avant, à vérifier sur l’appareil.`));
     if (Number(st.tb) > PAGE_REV) head.append(el('div', 'seen', `Cette page est plus ancienne que le bot (v${st.v || '?'}) : recharge-la (une nouvelle version peut mettre quelques minutes à arriver).`));
     const list = el('ul', 'bots');
     for (const [bot, label, b] of botsOf(st)) {
       const v = botView(bot, b);
       const li = el('li', 'bot');
       const line = el('div', 'bline');
-      line.append(el('span', 'bname', label), el('span', `pill ${v.pill}`, v.label));
+      // Appareil hors ligne : pastilles grises (états d'avant, peut-être faux).
+      line.append(el('span', 'bname', label), el('span', `pill ${online ? v.pill : 'off'}`, v.label));
       li.append(line);
       if (v.text || v.until) {
         const det = el('div', 'detail');
@@ -327,14 +365,26 @@
       if (v.relaunch && online) {
         const key = `${d}|${bot}`;
         const sent = state.sent[key] && Date.now() - state.sent[key] < RESEND_MS;
+        const failed = !sent && state.sentErr[key] && Date.now() - state.sentErr[key] < RESEND_MS;
         const actions = el('div', 'actions');
-        const btn = el('button', 'btn', sent ? 'Demande envoyée' : 'Relancer');
+        const btn = el('button', 'btn', sent ? 'Envoyé' : 'Relancer');
         btn.type = 'button';
         btn.disabled = !!sent;
         btn.setAttribute('aria-label', `Relancer ${label} sur ${name.toLowerCase()}`);
         btn.addEventListener('click', () => relaunch(d, bot, btn));
         actions.append(btn);
-        if (sent) actions.append(el('span', 'detail', 'L’appareil recharge la page à sa prochaine relève (1 min environ).'));
+        if (sent) actions.append(el('span', 'detail', 'L’appareil relance le bot dans 1 min environ.'));
+        if (failed) actions.append(el('span', 'detail error', 'Non envoyé : ntfy.sh ne répond pas. Réessaie.'));
+        li.append(actions);
+      }
+      // Case à cocher : elle se coche depuis n'importe quel appareil.
+      if (v.site && online) {
+        const actions = el('div', 'actions');
+        const a = el('a', 'btn ghost', 'Ouvrir le site');
+        a.href = SITE;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        actions.append(a);
         li.append(actions);
       }
       list.append(li);
@@ -358,16 +408,19 @@
   }
   // Saisie finie : le champ lâche le focus pour que la liste se redessine.
   const unfocus = () => { const a = document.activeElement; if (a && $('shop').contains(a) && a.blur) a.blur(); };
-  async function shopSend(cmd, key, btn) {
+  // Nom publié coupé à 40 caractères (deviceStatus).
+  const sameName = (a, b) => String(a).slice(0, 40).trim().toLowerCase() === String(b).slice(0, 40).trim().toLowerCase();
+  // done(liste) : la demande se voit dans la liste reçue → note effacée.
+  async function shopSend(cmd, key, btn, done) {
     if (btn) btn.disabled = true;
     unfocus();
     try {
       await sendCommand({ t: 'shop', ...cmd });
       state.shopSent[key] = Date.now();
-      state.shopNote = 'Demande envoyée : l’appareil l’applique à sa prochaine relève (1 min environ), puis la liste se met à jour ici.';
-      state.error = '';
+      state.shopNote = { text: 'Envoyé : la liste se met à jour ici dans 1 min environ.', at: Date.now(), done };
+      if (cmd.op === 'add') state.shopDraft = { n: '', r: '', m: 'one' };
     } catch (err) {
-      state.error = `Demande non envoyée : ntfy.sh ne répond pas (${err.message}). Réessaie.`;
+      state.shopNote = { text: 'Non envoyé : ntfy.sh ne répond pas. Réessaie.', at: Date.now(), err: true };
     }
     render();
   }
@@ -379,37 +432,44 @@
     if (!src) return;
     const head = el('div', 'dhead');
     const row = el('div', 'drow');
-    row.append(el('h2', 'dname', 'Shopping'), el('span', `pill ${src.running ? 'on' : 'off'}`, src.running ? `Actif : ${src.name.toLowerCase()}` : 'Bot OFF'));
-    head.append(row, el('div', 'seen', `Liste de souhaits de ${src.name === 'Tablette' ? 'la tablette' : 'l’ordinateur'} (état ${ago(src.st.at)})${src.running ? '' : ' · le bot shopping ne tourne sur aucun appareil'}`));
+    row.append(el('h2', 'dname', 'Shopping'), el('span', `pill ${src.running ? 'on' : 'off'}`, src.running ? `Actif : ${src.name.toLowerCase()}` : 'OFF'));
+    head.append(row, el('div', 'seen', `Liste de ${src.name === 'Tablette' ? 'la tablette' : 'l’ordinateur'} (état ${ago(src.st.at)})${src.running ? '' : ' · Shopping OFF sur tous les appareils'}`));
     const canWant = Number(src.st.tb) >= 5;
+    const shop = src.st.shop;
     const list = el('ul', 'items');
-    for (const [id, name, rarity, mode, end, want] of src.st.shop) {
+    for (const [id, name, rarity, mode, end, want] of shop) {
       const li = el('li', 'item');
       const info = el('div');
-      info.append(el('div', 'iname', name), el('div', 'detail', `${rarity || 'toutes raretés'} · ${mode === 'loop' ? 'en continu' : 'x1'}${want ? ' · Je la veux ! (P70)' : ''}${end ? ` · misée, fin à ${clock(end)}` : ''}`));
+      info.append(el('div', 'iname', name), el('div', 'detail', `${rarity || 'toutes raretés'} · ${mode === 'loop' ? 'en continu' : 'x1'}${end ? ` · misée, fin à ${clock(end)}` : ''}`));
       const acts = el('div', 'acts');
       if (canWant) {
-        const wAsked = state.shopSent[`want|${id}`] && Date.now() - state.shopSent[`want|${id}`] < RESEND_MS;
-        const wb = el('button', 'btn ghost want', wAsked ? 'Demandé' : 'Je la veux !');
+        // Interrupteur : état en clair ; « Envoyé » jusqu'à ce que la liste suive.
+        const target = want ? 0 : 1;
+        const wKey = `want|${id}|${target}`;
+        const wAsked = state.shopSent[wKey] && Date.now() - state.shopSent[wKey] < RESEND_MS;
+        const wb = el('button', 'btn ghost want', wAsked ? 'Envoyé' : `${want ? '☑' : '☐'} Je la veux !`);
         wb.type = 'button';
         wb.disabled = !!wAsked;
         wb.setAttribute('aria-pressed', want ? 'true' : 'false');
-        wb.setAttribute('aria-label', `Je la veux ! pour ${name} (mise jusqu’à P70)`);
+        wb.setAttribute('aria-label', `Je la veux ! pour ${name} (mise jusqu’au prix Ambitieux)`);
         // Pour les deux appareils : numéro de cette liste, et nom + rareté pour l'autre.
-        wb.addEventListener('click', () => shopSend({ op: 'set', d: '*', i: id, n: name, r: rarity, w: want ? 0 : 1 }, `want|${id}`, wb));
+        wb.addEventListener('click', () => shopSend({ op: 'set', d: '*', i: id, n: name, r: rarity, w: target }, wKey, wb,
+          (l) => l.some((x) => x[0] === id && !!x[5] === !!target)));
         acts.append(wb);
       }
       const asked = state.shopSent[`del|${id}`] && Date.now() - state.shopSent[`del|${id}`] < RESEND_MS;
-      const btn = el('button', 'btn ghost', asked ? 'Retrait demandé' : 'Retirer');
+      const btn = el('button', 'btn ghost', asked ? 'Envoyé' : 'Retirer');
       btn.type = 'button';
       btn.disabled = !!asked;
       btn.setAttribute('aria-label', `Retirer ${name} de la liste de shopping`);
-      btn.addEventListener('click', () => shopSend({ op: 'del', d: src.dev, i: id }, `del|${id}`, btn));
+      btn.addEventListener('click', () => shopSend({ op: 'del', d: src.dev, i: id }, `del|${id}`, btn, (l) => !l.some((x) => x[0] === id)));
       acts.append(btn);
       li.append(info, acts);
       list.append(li);
     }
-    if (!src.st.shop.length) list.append(el('li', 'empty', 'Liste vide.'));
+    if (!shop.length) list.append(el('li', 'empty', 'Liste vide.'));
+    // Ordre de remplissage : nom, rareté et combien, « Je la veux ! », puis Ajouter.
+    const draft = state.shopDraft;
     const form = el('form', 'add');
     form.noValidate = true;
     const r1 = el('div', 'row');
@@ -418,6 +478,8 @@
     name.placeholder = 'Nom exact de la carte';
     name.setAttribute('aria-label', 'Nom exact de la carte');
     name.autocomplete = 'off';
+    name.value = draft.n;
+    name.addEventListener('input', () => { draft.n = name.value; });
     r1.append(name);
     const r2 = el('div', 'row');
     const rar = el('select');
@@ -427,6 +489,8 @@
       o.value = v;
       rar.append(o);
     }
+    rar.value = draft.r;
+    rar.addEventListener('change', () => { draft.r = rar.value; });
     const qty = el('select');
     qty.setAttribute('aria-label', 'Combien');
     for (const [v, label] of [['one', 'x1 (retirée une fois gagnée)'], ['loop', 'En continu']]) {
@@ -434,9 +498,9 @@
       o.value = v;
       qty.append(o);
     }
-    const add = el('button', 'btn', 'Ajouter');
-    add.type = 'submit';
-    r2.append(rar, qty, add);
+    qty.value = draft.m;
+    qty.addEventListener('change', () => { draft.m = qty.value; });
+    r2.append(rar, qty);
     form.append(r1, r2);
     const wantBox = el('input');
     if (canWant) {
@@ -445,21 +509,32 @@
       wantBox.name = 'veux';
       wantBox.checked = !!state.shopWant;
       wantBox.addEventListener('change', () => { state.shopWant = wantBox.checked; });
-      label.append(wantBox, document.createTextNode('Je la veux ! (mise jusqu’à P70 au lieu de la médiane)'));
+      label.append(wantBox, document.createTextNode('Je la veux ! (jusqu’au prix Ambitieux)'));
       form.append(label);
     }
-    if (state.shopNote) form.append(el('div', 'detail', state.shopNote));
+    const r3 = el('div', 'row');
+    const add = el('button', 'btn', 'Ajouter');
+    add.type = 'submit';
+    r3.append(add);
+    form.append(r3);
+    // Retour du dernier envoi : effacé après RESEND_MS ou dès que la liste suit.
+    const note = state.shopNote;
+    if (note && (Date.now() - note.at > RESEND_MS || (note.done && note.done(shop)))) state.shopNote = null;
+    else if (note) form.append(el('div', `detail${note.err ? ' error' : ''}`, note.text));
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       const n = name.value.trim().slice(0, 80);
       if (!n) {
-        state.shopNote = 'Écris le nom exact de la carte.';
+        state.shopNote = { text: 'Écris le nom exact de la carte.', at: Date.now(), err: true };
         unfocus();
         render();
         return;
       }
+      // Carte déjà dans la liste : note gardée jusqu'à RESEND_MS.
+      const before = shop.some((x) => sameName(x[1], n));
       // Sans « Je la veux ! » coché : w absent, laissé tel quel pour une carte déjà là.
-      shopSend({ op: 'add', d: src.d, n, r: rar.value, m: qty.value, ...(canWant && wantBox.checked ? { w: 1 } : {}) }, `add|${n}`, add);
+      shopSend({ op: 'add', d: src.d, n, r: rar.value, m: qty.value, ...(canWant && wantBox.checked ? { w: 1 } : {}) }, `add|${n}`, add,
+        before ? null : (l) => l.some((x) => sameName(x[1], n)));
     });
     box.append(head, list, form);
   }
@@ -511,6 +586,7 @@
     state.since = '12h';
     state.devices = {};
     state.sent = {};
+    state.sentErr = {};
     store.set(t);
     showSetup(false);
     poll();

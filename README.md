@@ -9,6 +9,12 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.22.0** (27/10, avec le bot de l'ordinateur v1.12.0) : bouton **Tableau de
+bord** dans le bandeau ; télécommande : enchères dépassées comptées dans le
+bandeau replié, choix non envoyé signalé sous l'enchère ; shopping :
+« ❤ Je la veux ! : oui / non », boutons « Ajouter x1 » / « Ajouter en
+continu », confirmation plus courte.
+
 **v1.21.0** (23/10, avec le bot de l'ordinateur v1.11.0) : plafond « Achat »
 au moins 300 sous la médiane (au lieu de 400 sous le P60) ; pastille violette
 (« à défausser ») comme le nettoyage : 10 ventes ou moins en tout jusqu'à

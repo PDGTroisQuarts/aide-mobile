@@ -12,7 +12,7 @@ par défaut).
 **v1.22.0** (27/10, avec le bot de l'ordinateur v1.12.0) : bouton **Tableau de
 bord** dans le bandeau ; télécommande : enchères dépassées comptées dans le
 bandeau replié, choix non envoyé signalé sous l'enchère ; shopping :
-« ❤ Je la veux ! : oui / non », boutons « Ajouter x1 » / « Ajouter en
+interrupteur « ☐ / ☑ Je la veux ! », boutons « Ajouter x1 » / « Ajouter en
 continu », confirmation plus courte.
 
 **v1.21.0** (23/10, avec le bot de l'ordinateur v1.11.0) : plafond « Achat »

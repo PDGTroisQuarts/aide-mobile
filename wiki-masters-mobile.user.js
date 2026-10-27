@@ -3660,7 +3660,7 @@
       : 'Non envoyé : ntfy.sh ne répond pas. Réessaie.';
     const want = shopWantOn(key);
     const b = (mode, label) => `<button type="button" data-shop="${mode}" data-title="${esc(title)}" data-rarity="${esc(r)}">${label}</button>`;
-    const w = `<button type="button" data-shopwant="${want ? 0 : 1}" data-title="${esc(title)}" data-rarity="${esc(r)}" aria-pressed="${want}" class="${want ? 'on' : ''}">❤ Je la veux ! : ${want ? 'oui' : 'non'}</button>`;
+    const w = `<button type="button" data-shopwant="${want ? 0 : 1}" data-title="${esc(title)}" data-rarity="${esc(r)}" aria-pressed="${want}" class="${want ? 'on' : ''}">${want ? '☑' : '☐'} Je la veux !</button>`;
     return `<div class="wv-status wv-shop-row"><span>🛒 Shopping${r ? ` (${esc(r)})` : ''} :</span>${w}${b('one', 'Ajouter x1')}${b('loop', 'Ajouter en continu')}${note ? `<span class="${shopState.ok ? '' : 'wv-err'}">${esc(note)}</span>` : ''}</div>`;
   }
   async function shopAsk(title, rarity, mode, want = false) {

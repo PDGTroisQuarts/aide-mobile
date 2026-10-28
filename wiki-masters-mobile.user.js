@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wiki Masters — aide mobile (achat et vente)
 // @namespace    https://github.com/PDGTroisQuarts/Claude-code-repository/mobile
-// @version      1.22.0
+// @version      1.22.1
 // @updateURL    https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @downloadURL  https://raw.githubusercontent.com/PDGTroisQuarts/aide-mobile/main/wiki-masters-mobile.user.js
 // @description  Version téléphone de l'aide à la vente et à l'achat : valeur des cartes dans la collection, écart en % sur le marché, détail d'une carte et d'une enchère, télécommande du bot de surenchère. Ne mise ni ne vend jamais.
@@ -2089,12 +2089,19 @@
   // Encart « téléphone » : bandeau sur toute la largeur, en bas (ou en haut,
   // réglable), réduit par défaut à une ligne qui donne l'essentiel ; un toucher
   // sur cette ligne affiche le détail (défilable, 55 % de l'écran au plus).
+  // En bas : juste au-dessus de la barre de navigation du site (téléphone :
+  // Paquets, Collection, Échanges, Marché, Plus), mesurée par placePanel
+  // (--wv-nav) ; avant la première mesure, sa hauteur estimée (largeur de
+  // téléphone : la barre n'existe que sous 768 px).
   style.textContent = `
     #wv-panel { --wv-bg: rgba(20,20,24,.96); --wv-line: rgba(255,255,255,.1); --wv-muted: #a1a1aa;
-      position: fixed; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom, 0px)); z-index: 2147483647;
+      position: fixed; left: 8px; right: 8px; bottom: calc(8px + var(--wv-nav, var(--wv-nav-guess, env(safe-area-inset-bottom, 0px)))); z-index: 2147483647;
       max-width: 560px; margin: 0 auto; font: 13px/1.3 system-ui, -apple-system, sans-serif; color: #f4f4f5;
       background: var(--wv-bg); border: 1px solid var(--wv-line); border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
       overflow: hidden; display: none; -webkit-tap-highlight-color: transparent; }
+    @media (max-width: 767px) { #wv-panel { --wv-nav-guess: calc(64px + env(safe-area-inset-bottom, 0px)); } }
+    #wv-panel.wv-away { visibility: hidden; }
+    html.wv-low main { margin-bottom: var(--wv-room, 58px); }
     #wv-panel.wv-top { bottom: auto; top: calc(8px + env(safe-area-inset-top, 0px)); }
     #wv-panel header { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 4px 12px; cursor: pointer;
       border-bottom: 1px solid var(--wv-line); }
@@ -2106,7 +2113,8 @@
     #wv-panel .wv-sum { font-size: 13px; font-weight: 700; white-space: nowrap; }
     #wv-panel .wv-sum i { font-style: normal; color: var(--wv-muted); font-weight: 500; }
     #wv-panel .wv-chevron { color: var(--wv-muted); font-size: 12px; width: 12px; text-align: right; }
-    #wv-panel .wv-body { padding: 8px; display: grid; gap: 5px; max-height: 55vh; overflow-y: auto; overscroll-behavior: contain; }
+    #wv-panel .wv-body { padding: 8px; display: grid; gap: 5px; overflow-y: auto; overscroll-behavior: contain;
+      max-height: min(55vh, calc(100dvh - var(--wv-nav, var(--wv-nav-guess, 0px)) - 140px)); }
     #wv-panel.wv-min .wv-body { display: none; }
     #wv-panel .wv-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px;
       padding: 6px 9px; border-radius: 10px; background: rgba(255,255,255,.05); border-left: 3px solid var(--wv-c); }
@@ -2420,13 +2428,74 @@
       render();
     }
   }
+  // Barre de navigation du site en bas de l'écran (téléphone : nav.order-last
+  // du relevé du 28/10, sous 768 px de large) : visible, presque toute la
+  // largeur, collée au bas de l'écran, et pas recouverte (fiche d'une carte
+  // ouverte par-dessus : trois points de la barre sous un autre élément ; le
+  // bandeau, posé dessus avant la première mesure, ne compte pas).
+  // { el, r, open } (open : un menu de la barre, « Plus », dépasse au-dessus
+  // d'elle), ou null.
+  function siteBottomNav() {
+    for (const n of document.querySelectorAll('nav')) {
+      if (panel.contains(n)) continue;
+      const r = n.getBoundingClientRect();
+      if (r.width < innerWidth * 0.6 || r.height < 24 || r.height > 200 || r.top < innerHeight * 0.5 || r.bottom < innerHeight - 40) continue;
+      const cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue;
+      const y = r.top + r.height / 2;
+      const over = [0.15, 0.5, 0.85].map((f) => document.elementFromPoint(r.left + r.width * f, y));
+      if (over.every((el) => el && !n.contains(el) && !panel.contains(el))) return null;
+      const open = [...n.querySelectorAll('*')].some((el) => {
+        const q = el.getBoundingClientRect();
+        return q.width > 0 && q.height > 0 && q.top < r.top - 4;
+      });
+      return { el: n, r, open };
+    }
+    return null;
+  }
+  // Bandeau en bas, affiché : son bord bas 8 px au-dessus de la barre du site
+  // (--wv-nav : de la barre au bas de la zone des éléments fixes, mesuré sur le
+  // bandeau lui-même, quelle que soit la barre d'adresse de Firefox) ; sans
+  // barre, la marge du bas de l'écran (encoche, geste). Au-dessus de la barre,
+  // la place du bandeau replié est gardée sous la zone qui défile du site
+  // (html.wv-low main) : dernière enchère, « Charger la suite » ou bloc collé
+  // en bas jamais dessous. Menu de la barre ouvert : bandeau masqué
+  // (wv-away). Onglet caché : rien (bandeau sans boîte, mesure fausse).
+  function placePanel() {
+    if (document.hidden) return;
+    const root = document.documentElement;
+    const shown = panel.getClientRects().length > 0 && !panel.classList.contains('wv-top');
+    const nav = shown ? siteBottomNav() : null;
+    if (shown) {
+      let value = 'env(safe-area-inset-bottom, 0px)';
+      if (nav) {
+        const cur = parseFloat(getComputedStyle(panel).bottom);
+        if (!Number.isFinite(cur)) return;
+        value = `${Math.max(0, Math.round(panel.getBoundingClientRect().bottom + cur - nav.r.top))}px`;
+      }
+      if (panel.style.getPropertyValue('--wv-nav') !== value) panel.style.setProperty('--wv-nav', value);
+    }
+    const head = panel.querySelector('header');
+    const room = nav ? `${Math.round((head ? head.offsetHeight + 2 : panel.offsetHeight) + 8)}px` : '';
+    if (root.style.getPropertyValue('--wv-room') !== room) {
+      if (room) root.style.setProperty('--wv-room', room);
+      else root.style.removeProperty('--wv-room');
+    }
+    root.classList.toggle('wv-low', !!nav);
+    panel.classList.toggle('wv-away', !!(nav && nav.open));
+  }
+  addEventListener('resize', placePanel, { passive: true });
+  if (window.visualViewport) visualViewport.addEventListener('resize', placePanel, { passive: true });
+
   // Réaction immédiate aux changements de la page (ouverture d'une fiche), avec
   // une vérification régulière en filet de sécurité.
   let queued = false;
   // Onglet caché : rien, sauf pendant un nettoyage (lectures des valeurs).
   const runTick = () => {
     queued = false;
-    tick().catch((err) => console.error('[WV]', err));
+    // Place du bandeau : après ce tour (rendus asynchrones) et tout de suite
+    // (rendus faits avant leur première attente, peints avant la fin du tour).
+    tick().catch((err) => console.error('[WV]', err)).finally(placePanel);
     if (!document.hidden || clean.running) {
       if (!document.hidden) buyTick().catch((err) => console.error('[WV]', err));
       try {
@@ -2439,6 +2508,7 @@
         console.error('[WV]', err);
       }
     }
+    placePanel();
   };
   // Minuteries du worker seulement quand il le faut (onglet visible ou
   // nettoyage en cours) : un onglet caché inactif reste au ralenti.
@@ -2719,12 +2789,17 @@
     };
   }
 
+  // Bas visible de la page : zone qui défile du site (main), au-dessus de sa
+  // barre du bas ; une pastille d'enchère coupée par le défilement ne se
+  // dessine jamais sur la barre (relevé du 28/10).
   function placeBadges() {
-    placeIn(badges);
-    placeIn(cardBadges);
+    const main = document.querySelector('main');
+    const floor = main ? Math.min(innerHeight, main.getBoundingClientRect().bottom) : innerHeight;
+    placeIn(badges, floor);
+    placeIn(cardBadges, floor);
     placeSums();
   }
-  function placeIn(map) {
+  function placeIn(map, floor = innerHeight) {
     for (const [id, b] of map) {
       if (!b.target.isConnected) {
         b.el.remove();
@@ -2732,7 +2807,7 @@
         continue;
       }
       const r = b.target.getBoundingClientRect();
-      const out = r.width < CONFIG.detect.minPx || r.bottom < 0 || r.top > innerHeight;
+      const out = r.width < CONFIG.detect.minPx || r.bottom < 0 || r.top + CONFIG.ui.badgeTopPx > floor;
       b.el.style.display = out ? 'none' : '';
       if (out) continue;
       b.el.style.left = `${Math.round(r.left + r.width / 2)}px`;
@@ -4340,6 +4415,14 @@
       `Débit vers le site : ${gate.status()}`,
       `Réponses de la page lues : ${hookedResponses} · résumés de cartes : ${Object.keys(summaries).length} · pastilles de la collection : ${cardBadges.size}`,
       `Télécommande : ${rTopic() ? `sujet ${rTopic()}` : 'pas activée'} · enchères suivies ${remote.followed.length} · synchro ${remote.syncStatus} · page ${location.pathname}`,
+      (() => {
+        const nav = siteBottomNav();
+        const root = document.documentElement;
+        return `Bandeau : ${panel.classList.contains('wv-top') ? 'en haut' : 'en bas'}, ${panel.getClientRects().length ? 'affiché' : 'caché'}${panel.classList.contains('wv-away') ? ' (masqué : menu de la barre ouvert)' : ''} · bas ${getComputedStyle(panel).bottom}`
+          + ` · --wv-nav ${panel.style.getPropertyValue('--wv-nav') || '—'} · place gardée sous la page : ${root.classList.contains('wv-low') ? root.style.getPropertyValue('--wv-room') || 'oui' : 'non'}`
+          + ` · barre du site : ${nav ? `haut ${Math.round(nav.r.top)} px, hauteur ${Math.round(nav.r.height)} px${nav.open ? ', menu ouvert' : ''}, <nav class="${String(nav.el.getAttribute('class') || '').slice(0, 160)}">` : 'non trouvée (ou recouverte)'}`
+          + ` · fenêtre ${innerWidth}x${innerHeight} · zone visible ${window.visualViewport ? `${Math.round(visualViewport.width)}x${Math.round(visualViewport.height)}` : '—'}`;
+      })(),
       `Relais dans la page : ${bridgeReady ? 'actif' : 'inactif (requêtes directes)'} · minuteries : ${workerOk ? 'worker' : 'setTimeout'} · étoiles : revente = ${DELTA_REFS[deltaRef()]}`,
       `Achats connus : ${Object.keys(bought).length}${state.card ? ` · cette carte : ${state.purchase ? `${state.purchase.price} (${state.purchase.rarity || '?'})` : 'aucun'}` : ''}`
         + ` · fiche shiny : ${state.view ? state.shiny : '—'}`,

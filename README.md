@@ -9,6 +9,11 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.22.1** (28/10) : le bandeau (« Mes enchères », aide à l'achat) se place
+juste au-dessus de la barre du site (Paquets, Collection, Échanges, Marché,
+Plus) au lieu de la recouvrir ; le bas de la page reste visible au-dessus de
+lui, et il s'efface quand le menu « Plus » est ouvert.
+
 **v1.22.0** (27/10, avec le bot de l'ordinateur v1.12.0) : bouton **Tableau de
 bord** dans le bandeau ; télécommande : enchères dépassées comptées dans le
 bandeau replié, choix non envoyé signalé sous l'enchère ; shopping :

@@ -12,7 +12,8 @@ par défaut).
 **v1.22.1** (28/10) : le bandeau (« Mes enchères », aide à l'achat) se place
 juste au-dessus de la barre du site (Paquets, Collection, Échanges, Marché,
 Plus) au lieu de la recouvrir ; le bas de la page reste visible au-dessus de
-lui, et il s'efface quand le menu « Plus » est ouvert.
+lui. Menu « Plus » ouvert : bandeau masqué le temps du menu. Fiche d'une carte
+ouverte (elle recouvre la barre) : même place qu'avant.
 
 **v1.22.0** (27/10, avec le bot de l'ordinateur v1.12.0) : bouton **Tableau de
 bord** dans le bandeau ; télécommande : enchères dépassées comptées dans le

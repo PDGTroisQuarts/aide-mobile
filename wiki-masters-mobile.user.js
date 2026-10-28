@@ -2429,43 +2429,61 @@
     }
   }
   // Barre de navigation du site en bas de l'écran (téléphone : nav.order-last
-  // du relevé du 28/10, sous 768 px de large) : visible, presque toute la
-  // largeur, collée au bas de l'écran, et pas recouverte (fiche d'une carte
-  // ouverte par-dessus : trois points de la barre sous un autre élément ; le
-  // bandeau, posé dessus avant la première mesure, ne compte pas).
-  // { el, r, open } (open : un menu de la barre, « Plus », dépasse au-dessus
-  // d'elle), ou null.
+  // du relevé du 28/10, sous 768 px de large, voisine de main, jamais
+  // dedans) : visible, presque toute la largeur, collée au bas de l'écran.
+  // { el, r, covered, open } ou null. covered : élément du site posé sur elle
+  // (fiche d'une carte : le même aux trois points testés, bandeau laissé de
+  // côté, sinon le bandeau redescendu sur la barre la ferait croire libre).
+  // open : élément visible de la barre qui dépasse au-dessus d'elle (menu
+  // « Plus » ouvert ; un menu fermé mais resté dans la page ne compte pas).
   function siteBottomNav() {
     for (const n of document.querySelectorAll('nav')) {
-      if (panel.contains(n)) continue;
+      if (panel.contains(n) || n.closest('main')) continue;
       const r = n.getBoundingClientRect();
       if (r.width < innerWidth * 0.6 || r.height < 24 || r.height > 200 || r.top < innerHeight * 0.5 || r.bottom < innerHeight - 40) continue;
       const cs = getComputedStyle(n);
       if (cs.display === 'none' || cs.visibility === 'hidden' || Number(cs.opacity) === 0) continue;
       const y = r.top + r.height / 2;
-      const over = [0.15, 0.5, 0.85].map((f) => document.elementFromPoint(r.left + r.width * f, y));
-      if (over.every((el) => el && !n.contains(el) && !panel.contains(el))) return null;
-      const open = [...n.querySelectorAll('*')].some((el) => {
+      const over = [0.15, 0.5, 0.85].map((f) => document.elementsFromPoint(r.left + r.width * f, y).find((el) => !panel.contains(el)) || null);
+      const covered = over.every((el) => el && !n.contains(el)) ? over[1] : null;
+      const open = covered ? null : [...n.querySelectorAll('*')].find((el) => {
         const q = el.getBoundingClientRect();
-        return q.width > 0 && q.height > 0 && q.top < r.top - 4;
-      });
-      return { el: n, r, open };
+        return q.width > 0 && q.height > 0 && q.top < r.top - 4 && (!el.checkVisibility || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+      }) || null;
+      return { el: n, r, covered, open };
     }
     return null;
+  }
+  // Menu ouvert d'un toucher sur la barre mais posé ailleurs dans la page
+  // (navCover, voir le toucher plus bas) : encore là, visible et sous le
+  // bandeau ? Oublié sinon, et après 1 min.
+  let navCover = null;
+  function coverOn() {
+    if (!navCover) return false;
+    const { el, until } = navCover;
+    const pr = panel.getBoundingClientRect();
+    const q = el.isConnected ? el.getBoundingClientRect() : null;
+    if (Date.now() < until && q && q.width > 0 && q.bottom > pr.top && q.top < pr.bottom && q.right > pr.left && q.left < pr.right
+      && (!el.checkVisibility || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }))) return true;
+    navCover = null;
+    return false;
   }
   // Bandeau en bas, affiché : son bord bas 8 px au-dessus de la barre du site
   // (--wv-nav : de la barre au bas de la zone des éléments fixes, mesuré sur le
   // bandeau lui-même, quelle que soit la barre d'adresse de Firefox) ; sans
-  // barre, la marge du bas de l'écran (encoche, geste). Au-dessus de la barre,
-  // la place du bandeau replié est gardée sous la zone qui défile du site
-  // (html.wv-low main) : dernière enchère, « Charger la suite » ou bloc collé
-  // en bas jamais dessous. Menu de la barre ouvert : bandeau masqué
-  // (wv-away). Onglet caché : rien (bandeau sans boîte, mesure fausse).
+  // barre, ou barre recouverte, la marge du bas de l'écran (encoche, geste).
+  // Place du bandeau replié gardée sous la zone qui défile du site
+  // (html.wv-low main) tant que la barre est là, même recouverte (sinon la page
+  // défilée tout en bas serait rabattue, puis repasserait sous le bandeau) :
+  // dernière enchère, « Charger la suite » ou bloc collé en bas jamais dessous.
+  // Menu de la barre ouvert (dans la barre, ou ailleurs : navCover) : bandeau
+  // masqué (wv-away). Onglet caché : rien (bandeau sans boîte, mesure fausse).
   function placePanel() {
     if (document.hidden) return;
     const root = document.documentElement;
     const shown = panel.getClientRects().length > 0 && !panel.classList.contains('wv-top');
-    const nav = shown ? siteBottomNav() : null;
+    const bar = shown ? siteBottomNav() : null;
+    const nav = bar && !bar.covered ? bar : null;
     if (shown) {
       let value = 'env(safe-area-inset-bottom, 0px)';
       if (nav) {
@@ -2476,16 +2494,52 @@
       if (panel.style.getPropertyValue('--wv-nav') !== value) panel.style.setProperty('--wv-nav', value);
     }
     const head = panel.querySelector('header');
-    const room = nav ? `${Math.round((head ? head.offsetHeight + 2 : panel.offsetHeight) + 8)}px` : '';
+    const room = bar ? `${Math.round((head ? head.offsetHeight + 2 : panel.offsetHeight) + 8)}px` : '';
     if (root.style.getPropertyValue('--wv-room') !== room) {
       if (room) root.style.setProperty('--wv-room', room);
       else root.style.removeProperty('--wv-room');
     }
-    root.classList.toggle('wv-low', !!nav);
-    panel.classList.toggle('wv-away', !!(nav && nav.open));
+    root.classList.toggle('wv-low', !!bar);
+    panel.classList.toggle('wv-away', !!(nav && nav.open) || coverOn());
   }
+  // Élément décrit pour le diagnostic : balise et début des classes.
+  const descEl = (el) => (el ? `<${el.tagName.toLowerCase()} class="${String(el.getAttribute('class') || '').slice(0, 100)}">` : '—');
   addEventListener('resize', placePanel, { passive: true });
   if (window.visualViewport) visualViewport.addEventListener('resize', placePanel, { passive: true });
+  // Éléments du site sous le bandeau : trois points sur sa ligne du milieu et
+  // trois à 12 px de son bord bas (bandeau déplié, menu juste au-dessus de la barre).
+  const underPanel = () => {
+    const pr = panel.getBoundingClientRect();
+    if (!pr.height) return [];
+    return [pr.top + pr.height / 2, Math.max(pr.top, pr.bottom - 12)].flatMap((y) => [0.1, 0.5, 0.9]
+      .map((f) => document.elementsFromPoint(pr.left + pr.width * f, y).find((el) => !panel.contains(el)) || null));
+  };
+  // Toucher sur la barre (jamais un lien : changement de page) : élément du
+  // site arrivé sous le bandeau dans la 0,5 s, hors de main et de la barre =
+  // menu ouvert ailleurs dans la page (portail), bandeau masqué tant qu'il est
+  // là (navCover, 1 min au plus). Diagnostic : les trois derniers touchers et
+  // le bas de l'écran 0,5 s après, lisibles une fois le menu refermé.
+  let navTaps = [];
+  addEventListener('pointerdown', (e) => {
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function' || !t.closest('nav')) return;
+    const bar = siteBottomNav();
+    if (!bar || !bar.el.contains(t)) return;
+    const at = Date.now();
+    const link = t.closest('a[href]');
+    const what = descEl(t.closest('a, button') || t);
+    const before = underPanel();
+    setTimeout(() => {
+      const after = underPanel();
+      const main = document.querySelector('main');
+      const el = link ? null : after.find((x) => x && !before.includes(x) && !bar.el.contains(x) && !x.contains(bar.el)
+        && !(main && (main.contains(x) || x.contains(main)))) || null;
+      if (el) navCover = { el, until: at + 60000 };
+      placePanel();
+      const now = siteBottomNav();
+      navTaps = [...navTaps.slice(-2), { at, what, away: panel.classList.contains('wv-away'), open: now && now.open ? descEl(now.open) : '—', cover: descEl(el), under: [...new Set(after)].map(descEl).join(' | ') || '—' }];
+    }, 500);
+  }, { capture: true, passive: true });
 
   // Réaction immédiate aux changements de la page (ouverture d'une fiche), avec
   // une vérification régulière en filet de sécurité.
@@ -2789,17 +2843,18 @@
     };
   }
 
-  // Bas visible de la page : zone qui défile du site (main), au-dessus de sa
-  // barre du bas ; une pastille d'enchère coupée par le défilement ne se
-  // dessine jamais sur la barre (relevé du 28/10).
   function placeBadges() {
-    const main = document.querySelector('main');
-    const floor = main ? Math.min(innerHeight, main.getBoundingClientRect().bottom) : innerHeight;
-    placeIn(badges, floor);
-    placeIn(cardBadges, floor);
+    placeIn(badges);
+    placeIn(cardBadges);
     placeSums();
   }
-  function placeIn(map, floor = innerHeight) {
+  // Cible dans la zone qui défile du site (main) : pastille entière au-dessus
+  // de son bas visible (au-dessus de la barre du bas du site ; jamais dessinée
+  // sur la barre, relevé du 28/10). Pastille : 14 px de haut.
+  const BADGE_PX = 14;
+  function placeIn(map) {
+    const main = document.querySelector('main');
+    const floor = main ? Math.min(innerHeight, main.getBoundingClientRect().bottom) : innerHeight;
     for (const [id, b] of map) {
       if (!b.target.isConnected) {
         b.el.remove();
@@ -2807,7 +2862,8 @@
         continue;
       }
       const r = b.target.getBoundingClientRect();
-      const out = r.width < CONFIG.detect.minPx || r.bottom < 0 || r.top + CONFIG.ui.badgeTopPx > floor;
+      const low = main && main.contains(b.target) ? r.top + CONFIG.ui.badgeTopPx + BADGE_PX > floor : r.top > innerHeight;
+      const out = r.width < CONFIG.detect.minPx || r.bottom < 0 || low;
       b.el.style.display = out ? 'none' : '';
       if (out) continue;
       b.el.style.left = `${Math.round(r.left + r.width / 2)}px`;
@@ -4416,13 +4472,16 @@
       `Réponses de la page lues : ${hookedResponses} · résumés de cartes : ${Object.keys(summaries).length} · pastilles de la collection : ${cardBadges.size}`,
       `Télécommande : ${rTopic() ? `sujet ${rTopic()}` : 'pas activée'} · enchères suivies ${remote.followed.length} · synchro ${remote.syncStatus} · page ${location.pathname}`,
       (() => {
-        const nav = siteBottomNav();
+        const bar = siteBottomNav();
         const root = document.documentElement;
+        const pr = panel.getBoundingClientRect();
+        const under = pr.height ? document.elementsFromPoint(pr.left + pr.width / 2, pr.top + pr.height / 2).find((el) => !panel.contains(el)) : null;
         return `Bandeau : ${panel.classList.contains('wv-top') ? 'en haut' : 'en bas'}, ${panel.getClientRects().length ? 'affiché' : 'caché'}${panel.classList.contains('wv-away') ? ' (masqué : menu de la barre ouvert)' : ''} · bas ${getComputedStyle(panel).bottom}`
           + ` · --wv-nav ${panel.style.getPropertyValue('--wv-nav') || '—'} · place gardée sous la page : ${root.classList.contains('wv-low') ? root.style.getPropertyValue('--wv-room') || 'oui' : 'non'}`
-          + ` · barre du site : ${nav ? `haut ${Math.round(nav.r.top)} px, hauteur ${Math.round(nav.r.height)} px${nav.open ? ', menu ouvert' : ''}, <nav class="${String(nav.el.getAttribute('class') || '').slice(0, 160)}">` : 'non trouvée (ou recouverte)'}`
-          + ` · fenêtre ${innerWidth}x${innerHeight} · zone visible ${window.visualViewport ? `${Math.round(visualViewport.width)}x${Math.round(visualViewport.height)}` : '—'}`;
+          + ` · barre du site : ${bar ? `haut ${Math.round(bar.r.top)} px, hauteur ${Math.round(bar.r.height)} px${bar.covered ? `, recouverte par ${descEl(bar.covered)}` : ''}${bar.open ? `, menu ouvert : ${descEl(bar.open)}` : ''}, ${descEl(bar.el)}` : 'non trouvée'}`
+          + ` · sous le bandeau : ${descEl(under)} · fenêtre ${innerWidth}x${innerHeight} · zone visible ${window.visualViewport ? `${Math.round(visualViewport.width)}x${Math.round(visualViewport.height)}` : '—'}`;
       })(),
+      `Derniers touchers sur la barre du site (0,5 s après) : ${navTaps.length ? navTaps.map((t) => `\n  ${new Date(t.at).toLocaleTimeString('fr-FR')} ${t.what} : bandeau ${t.away ? 'masqué' : 'affiché'}, menu dans la barre ${t.open}, menu ailleurs ${t.cover}, sous le bandeau ${t.under}`).join('') : 'aucun'}`,
       `Relais dans la page : ${bridgeReady ? 'actif' : 'inactif (requêtes directes)'} · minuteries : ${workerOk ? 'worker' : 'setTimeout'} · étoiles : revente = ${DELTA_REFS[deltaRef()]}`,
       `Achats connus : ${Object.keys(bought).length}${state.card ? ` · cette carte : ${state.purchase ? `${state.purchase.price} (${state.purchase.rarity || '?'})` : 'aucun'}` : ''}`
         + ` · fiche shiny : ${state.view ? state.shiny : '—'}`,

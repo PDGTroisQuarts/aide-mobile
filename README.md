@@ -9,6 +9,9 @@ puis toucher « Installer » (ou « Mettre à jour ») sur la page de Tampermonk
 Ensuite, Tampermonkey vérifie seul les nouvelles versions (une fois par jour
 par défaut).
 
+**v1.22.2** (01/11, avec le bot de l'ordinateur v1.12.2) : plafond « Achat »
+= médiane − 400 (au lieu de − 300), comme le bot.
+
 **v1.22.1** (28/10) : le bandeau (« Mes enchères », aide à l'achat) se place
 juste au-dessus de la barre du site (Paquets, Collection, Échanges, Marché,
 Plus) au lieu de la recouvrir ; le bas de la page reste visible au-dessus de
